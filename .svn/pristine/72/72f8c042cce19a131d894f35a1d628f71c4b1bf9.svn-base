@@ -1,0 +1,467 @@
+//======================================================================
+/*!
+@file SegmentDisplay.c
+
+@copyright (c) 2016, Bay Computer Associates.<br>
+All rights reserved.<br>
+This file contains CONFIDENTIAL material.<br>
+Bay Computer Associates and forbids duplication of
+this material with out express written permission
+from Bay Computer Associates.
+
+@author John Heaney<br>
+Bay Computer Associates, Inc.<br>
+136 Frances Ave.<br>
+Cranston, RI 02910<br>
+Tel. (401) 461-1484
+
+Repository URL:		$HeadURL:  $
+Last changed by:	$Author: jheaney $
+Last changed on:	$Date:  $
+Revision:			$Rev:  $
+*/
+
+
+//API implementation includes.
+#include <fcntl.h>
+#include <linux/i2c-dev.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+#include <linux/types.h>
+#include "SegmentDisplay.h"
+#include "STREAM_macros.h"
+
+//////////////////////////////////////////////////
+#define SEGDISP_I2CADDR0 0x70
+#define SEGDISP_I2CADDR1 0x71
+
+#define SEGDISP_NUM_CHARS 4
+
+#define HT16K33_CMD_OSC_ON		0x21
+#define HT16K33_CMD_BRIGHTNESS	0xE0
+
+#define HT16K33_BLINK_CMD		0x80
+#define HT16K33_BLINK_DISPLAYON	0x01
+
+#define SEGDISP_DP_BITPOS 14
+#define SEGDISP_DP_BITMASK (1 << SEGDISP_DP_BITPOS)
+
+//Use this macro to put character bitmasks into the display buffers. The offset is the 
+// character position, not the byte offset. There are two display buffers because the
+// display is divided between two i2c controllers; each displaying 4 characters. The
+// buffNum parameter is 0 or 1.
+#define CHAR_TO_DISP_BUFFER(buffNum, c, offset) \
+	TYPE_ENDIAN_TO_STREAM_OFFSET(SEGDISP_STREAM_TYPE, LE_, displayBuffer##buffNum, (1 + offset * sizeof(SegDispBitmask)), c)
+#define CHAR_FROM_DISP_BUFFER(buffNum, offset) \
+	TYPE_ENDIAN_FROM_STREAM_OFFSET(SEGDISP_STREAM_TYPE, LE_, displayBuffer##buffNum, (1 + offset * sizeof(SegDispBitmask)))
+
+//======================================================================
+//! Private variables.
+
+static const char *device = "/dev/i2c-2";
+
+static const char * segDispErrDescs[SegDispErrCOUNT] = 
+{
+#define DISPLAY_ERROR_(enumTag, description) description,
+	DISPLAY_ERROR_LIST
+#undef DISPLAY_ERROR_
+};
+
+//i2c byte buffers for sending to display. Note there are two buffers and there
+// is one extra byte in each to hold the initial write offset.
+static uint8_t displayBuffer0[1 + (SEGDISP_NUM_CHARS * sizeof(SegDispBitmask))];
+static uint8_t displayBuffer1[1 + (SEGDISP_NUM_CHARS * sizeof(SegDispBitmask))];
+
+static const SegDispBitmask alphafonttable[] = 
+{
+0b0000000000000001,
+0b0000000000000010,
+0b0000000000000100,
+0b0000000000001000,
+0b0000000000010000,
+0b0000000000100000,
+0b0000000001000000,
+0b0000000010000000,
+0b0000000100000000,
+0b0000001000000000,
+0b0000010000000000,
+0b0000100000000000,
+0b0001000000000000,
+0b0010000000000000,
+0b0100000000000000,
+0b1000000000000000,
+0b0000000000000000,
+0b0000000000000000,
+0b0000000000000000,
+0b0000000000000000,
+0b0000000000000000,
+0b0000000000000000,
+0b0000000000000000,
+0b0000000000000000,
+0b0001001011001001,
+0b0001010111000000,
+0b0001001011111001,
+0b0000000011100011,
+0b0000010100110000,
+0b0001001011001000,
+0b0011101000000000,
+0b0001011100000000,
+0b0000000000000000, //  
+0b0000000000000110, // !
+0b0000001000100000, // "
+0b0001001011001110, // #
+0b0001001011101101, // $
+0b0000110000100100, // %
+0b0010001101011101, // &
+0b0000010000000000, // '
+0b0010010000000000, // (
+0b0000100100000000, // )
+0b0011111111000000, // *
+0b0001001011000000, // +
+0b0000100000000000, // ,
+0b0000000011000000, // -
+0b0000000000000000, // .
+0b0000110000000000, // /
+0b0000110000111111, // 0
+0b0000000000000110, // 1
+0b0000000011011011, // 2
+0b0000000010001111, // 3
+0b0000000011100110, // 4
+0b0010000001101001, // 5
+0b0000000011111101, // 6
+0b0000000000000111, // 7
+0b0000000011111111, // 8
+0b0000000011101111, // 9
+0b0001001000000000, // :
+0b0000101000000000, // ;
+0b0010010000000000, // <
+0b0000000011001000, // =
+0b0000100100000000, // >
+0b0001000010000011, // ?
+0b0000001010111011, // @
+0b0000000011110111, // A
+0b0001001010001111, // B
+0b0000000000111001, // C
+0b0001001000001111, // D
+0b0000000011111001, // E
+0b0000000001110001, // F
+0b0000000010111101, // G
+0b0000000011110110, // H
+0b0001001000000000, // I
+0b0000000000011110, // J
+0b0010010001110000, // K
+0b0000000000111000, // L
+0b0000010100110110, // M
+0b0010000100110110, // N
+0b0000000000111111, // O
+0b0000000011110011, // P
+0b0010000000111111, // Q
+0b0010000011110011, // R
+0b0000000011101101, // S
+0b0001001000000001, // T
+0b0000000000111110, // U
+0b0000110000110000, // V
+0b0010100000110110, // W
+0b0010110100000000, // X
+0b0001010100000000, // Y
+0b0000110000001001, // Z
+0b0000000000111001, // [
+0b0010000100000000, // 
+0b0000000000001111, // ]
+0b0000110000000011, // ^
+0b0000000000001000, // _
+0b0000000100000000, // `
+0b0001000001011000, // a
+0b0010000001111000, // b
+0b0000000011011000, // c
+0b0000100010001110, // d
+0b0000100001011000, // e
+0b0000000001110001, // f
+0b0000010010001110, // g
+0b0001000001110000, // h
+0b0001000000000000, // i
+0b0000000000001110, // j
+0b0011011000000000, // k
+0b0000000000110000, // l
+0b0001000011010100, // m
+0b0001000001010000, // n
+0b0000000011011100, // o
+0b0000000101110000, // p
+0b0000010010000110, // q
+0b0000000001010000, // r
+0b0010000010001000, // s
+0b0000000001111000, // t
+0b0000000000011100, // u
+0b0010000000000100, // v
+0b0010100000010100, // w
+0b0010100011000000, // x
+0b0010000000001100, // y
+0b0000100001001000, // z
+0b0000100101001001, // {
+0b0001001000000000, // |
+0b0010010010001001, // }
+0b0000010100100000, // ~
+0b0011111111111111,
+};
+
+//======================================================================
+//! Private prototypes.
+SegDispErrEnum SegDispWriteByte(uint8_t byte, bool addr0, bool addr1);
+SegDispErrEnum SegDispWriteBuffer(uint8_t i2cAddr, uint8_t * buffer, int bufferSize);
+
+
+//======================================================================
+/*!
+@brief	Set the brightness levels and optionally update the LEDs.
+@details
+
+@return		NONE.
+@param	evt	Pointer to EventEnum variable to receive the event.
+
+@author	John Heaney
+@see	EVT_QUEUE_SIZE
+@test	11/03/2014 Unit Test: UNTESTED
+*/
+SegDispErrEnum	SegDispSetBrightness(SegDispBrightness brightness1, SegDispBrightness brightness2)
+{
+	uint8_t			byte;
+	SegDispErrEnum	err;
+
+	if (brightness1 > SEGDISP_BRIGHTNESS_MAX)
+		brightness1 = SEGDISP_BRIGHTNESS_MAX;
+
+	err = SegDispWriteByte(HT16K33_CMD_BRIGHTNESS | brightness1, true, false);
+	if (SegDispNoErr == err)
+	{
+		if (brightness2 > SEGDISP_BRIGHTNESS_MAX)
+			brightness2 = SEGDISP_BRIGHTNESS_MAX;
+
+		err = SegDispWriteByte(HT16K33_CMD_BRIGHTNESS | brightness2, false, true);
+	}
+	return err;
+}
+
+const char* SegDispErrDesc(SegDispErrEnum err)
+{
+	return segDispErrDescs[err];
+}
+
+SegDispErrEnum SegDispSetBitmask(int displayOffset, SegDispBitmask bitmask)
+{
+	SegDispErrEnum	result = SegDispNoErr;
+	int		bufferOffset;
+
+	if (displayOffset < SEGDISP_NUM_CHARS)
+	{
+		bufferOffset = displayOffset;
+		CHAR_TO_DISP_BUFFER(0, bitmask, bufferOffset);
+	}
+	else
+	{
+		bufferOffset = displayOffset - SEGDISP_NUM_CHARS;
+		if (bufferOffset < SEGDISP_NUM_CHARS)
+		{
+			CHAR_TO_DISP_BUFFER(1, bitmask, bufferOffset);
+		}
+		else
+		{
+			result = SegDispTooLong;
+		}
+	}
+	return result;
+}
+
+SegDispErrEnum SegDispGetBitmask(uint8_t displayOffset, SegDispBitmask * bitmask)
+{
+	SegDispErrEnum	result = SegDispNoErr;
+	int		bufferOffset;
+
+	if (displayOffset < SEGDISP_NUM_CHARS)
+	{
+		bufferOffset = displayOffset;
+		*bitmask = CHAR_FROM_DISP_BUFFER(0, bufferOffset);
+	}
+	else
+	{
+		bufferOffset = displayOffset - SEGDISP_NUM_CHARS;
+		if (bufferOffset < SEGDISP_NUM_CHARS)
+		{
+			*bitmask = CHAR_FROM_DISP_BUFFER(1, bufferOffset);
+		}
+		else
+		{
+			result = SegDispTooLong;
+		}
+	}
+	return result;
+}
+
+SegDispErrEnum SegDispAscii(int displayOffset, uint8_t ascii,  bool dp)
+{
+	SegDispBitmask	bitmask;
+
+	bitmask = alphafonttable[ascii];
+	if (dp) bitmask |= SEGDISP_DP_BITMASK;
+
+	return SegDispSetBitmask(displayOffset, bitmask);
+}
+
+void SegDispClear(void)
+{
+	int	i;
+
+	for (i = 0; i < sizeof(displayBuffer0); i++)
+	{
+		displayBuffer0[i] = 0;    
+		displayBuffer1[i] = 0;    
+	}
+}
+
+SegDispErrEnum SegDispUpdate(void)
+{
+	SegDispErrEnum	err = SegDispNoErr;
+
+	displayBuffer0[0] = 0;
+	err = SegDispWriteBuffer(SEGDISP_I2CADDR0, displayBuffer0, sizeof(displayBuffer0));
+
+	if (SegDispNoErr == err)
+	{
+		displayBuffer1[0] = 0;
+		err = SegDispWriteBuffer(SEGDISP_I2CADDR1, displayBuffer1, sizeof(displayBuffer1));
+	}
+
+	return err;
+}
+
+SegDispErrEnum SegDispInit()
+{
+	SegDispErrEnum	err = SegDispNoErr;
+
+	SegDispClear();
+	err = SegDispUpdate();
+	if (SegDispNoErr != err)
+		return err;
+
+	err = SegDispWriteByte(HT16K33_CMD_OSC_ON, true, true);
+	if (SegDispNoErr != err)
+		return err;
+
+	err = SegDispBlinkRate(HT16K33_BLINK_OFF, HT16K33_BLINK_OFF);
+	if (SegDispNoErr != err)
+		return err;
+
+	err = SegDispSetBrightness(SEGDISP_BRIGHTNESS_MAX, SEGDISP_BRIGHTNESS_MAX);
+	if (SegDispNoErr != err)
+		return err;
+
+}
+
+SegDispErrEnum SegDispBlinkRate(uint8_t rate1, uint8_t rate2)
+{
+	uint8_t			byte;
+	SegDispErrEnum	err = SegDispNoErr;
+
+	if (rate1 > HT16K33_BLINK_HALFHZ)
+		rate1 = HT16K33_BLINK_OFF;
+
+	byte = HT16K33_BLINK_CMD | HT16K33_BLINK_DISPLAYON | (rate1 << 1);
+	err = SegDispWriteByte(byte, true, false);
+	if (SegDispNoErr == err)
+	{
+		if (rate2 > HT16K33_BLINK_HALFHZ)
+			rate2 = HT16K33_BLINK_OFF;
+
+		byte = HT16K33_BLINK_CMD | HT16K33_BLINK_DISPLAYON | (rate2 << 1);
+		err = SegDispWriteByte(byte, false, true);
+	}
+
+	return err;
+}
+
+SegDispErrEnum SegDispWriteBuffer(uint8_t i2cAddr, uint8_t * buffer, int bufferSize)
+{
+	int				fd;
+	int				ret;
+	SegDispErrEnum	result;
+
+	result = SegDispNoErr;
+
+	fd = open(device, O_RDWR);
+	if (fd < 0)
+	{
+		result = SegDispOpenErr;
+	}
+	else
+	{
+		//Acquire i2c bus.
+		ret = ioctl(fd, I2C_SLAVE, i2cAddr);
+		if (ret == -1)
+		{
+			result = SegDispAcquireI2CErr;
+		}
+		else
+		{
+			//Send the bytes.
+			ret = write(fd, buffer, bufferSize);
+			if (ret == -1)
+			{
+				result = SegDispWriteI2CErr;
+			}
+		}
+
+		close(fd);
+	}
+	return result;
+}
+
+SegDispErrEnum SegDispWriteByte(uint8_t byte, bool addr0, bool addr1)
+{
+	SegDispErrEnum	err = SegDispNoErr;
+
+	if (addr0)
+	{
+		err = SegDispWriteBuffer(SEGDISP_I2CADDR0, &byte, 1);
+	}
+
+	if ((SegDispNoErr == err) && addr1)
+	{
+		err = SegDispWriteBuffer(SEGDISP_I2CADDR1, &byte, 1);
+	}
+	return err;
+}
+
+SegDispErrEnum	SegDispText(int displayOffset, const char * buffer, int bufferSize)
+{
+	int				i;
+	char			byte;
+	SegDispErrEnum	err = SegDispNoErr;
+	SegDispBitmask	mask;
+
+	for (i = 0; i < bufferSize; i++)
+	{
+		byte = buffer[i];
+		if (0 == byte)
+			break;
+
+		if ('.' == byte)
+		{
+			if (i > 0)
+				displayOffset--;
+
+			err = SegDispGetBitmask(displayOffset, &mask);
+			if (SegDispNoErr == err)
+			{
+				err = SegDispSetBitmask(displayOffset, mask | SEGDISP_DP_BITMASK);
+			}
+		}
+		else
+		{
+			err = SegDispAscii(displayOffset, byte,  false);
+		}
+		if (SegDispNoErr != err)
+			break;
+
+		displayOffset++;
+	}
+	return err;
+}

@@ -1,0 +1,392 @@
+/*!
+ *	@file		usps_bb_api.c
+ *	@author		BCA
+ *	@version	1.0.0
+ *	@date		12/2/16
+ *	@brief		Source for USPS Blue Box API
+ *	@copyright	© Bay Computer Associates, Incorporated 2016
+				All rights reserved
+				This file contains CONFIDENTIAL material
+ *	@remark		Matilda USPS Blue Box
+ *	@Repository URL: $HeadURL: $
+ *	Last changed by: $Author: $
+ *	Last changed on: $Date: $
+ *	Revision:		$Rev: $
+**/
+
+#include "usps_bb_api.h"
+#include "dotstar.h"
+#include "Backlight.h"
+
+#include <stdio.h>
+
+static const char *cDevice="/dev/spidev1.0";
+static const uint16_t cNumLEDs=240;
+static const uint16_t cCenter=5;
+
+/*!
+ *	@brief		led initialize
+ *	@details
+ *	@retval		none
+ *	@test
+**/
+
+void usps_bb_led_initialize()
+{
+	dotstar_create(cDevice,8000000,cNumLEDs);
+}
+
+/*!
+ *	@brief		led done 
+ *	@details
+ *	@retval		none
+ *	@test
+**/
+
+void usps_bb_led_done()
+{
+	dotstar_destroy();
+}
+
+/*!
+ *	@brief		led clear 
+ *	@details
+ *	@retval		none
+ *	@test
+**/
+
+void usps_bb_led_clear()
+{
+	dotstar_clear();
+}
+
+/*!
+ *	@brief		led show 
+ *	@details
+ *	@retval		none
+ *	@test
+**/
+
+void usps_bb_led_show()
+{
+	dotstar_show();
+}
+
+/*!
+ *	@brief		set led pixel
+ *	@details
+ *	@param		[in] pixel: uint16_t pixel number
+ *	@param		[in] r: uint8_t red
+ *	@param		[in] g: uint8_t green
+ *	@param		[in] b: uint8_t blue
+ *	@param		[in] brightness: uint8_t brightness maximum 15
+ *	@retval		none
+ *	@test
+**/
+
+void usps_bb_led_set_pixel(
+	uint16_t pixel,
+	uint8_t r,
+	uint8_t g,
+	uint8_t b,
+	uint8_t brightness)
+{
+	dotstar_set_pixel(pixel,r,g,b,brightness);
+}
+
+/*!
+ *	@brief		set led pixel red
+ *	@details
+ *	@param		[in] pixel: uint16_t pixel number
+ *	@param		[in] r: uint8_t red
+ *	@retval		none
+ *	@test
+**/
+
+void usps_bb_led_set_pixel_red(
+	uint16_t pixel,
+	uint8_t r)
+{
+	dotstar_set_pixel_red(pixel,r);
+}
+
+/*!
+ *	@brief		set led pixel green
+ *	@details
+ *	@param		[in] pixel: uint16_t pixel number
+ *	@param		[in] g: uint8_t green
+ *	@retval		none
+ *	@test
+**/
+
+void usps_bb_led_set_pixel_green(
+	uint16_t pixel,
+	uint8_t g)
+{
+	dotstar_set_pixel_green(pixel,g);
+}
+
+/*!
+ *	@brief		set led pixel blue
+ *	@details
+ *	@param		[in] pixel: uint16_t pixel number
+ *	@param		[in] b: uint8_t blue
+ *	@retval		none
+ *	@test
+**/
+
+void usps_bb_led_set_pixel_blue(
+	uint16_t pixel,
+	uint8_t b)
+{
+	dotstar_set_pixel_blue(pixel,b);
+}
+
+/*!
+ *	@brief		set led pixel brightness
+ *	@details
+ *	@param		[in] pixel: uint16_t pixel number
+ *	@param		[in] brightness: uint8_t brightness maximum 15
+ *	@retval		none
+ *	@test
+**/
+
+void usps_bb_led_set_pixel_brightness(
+	uint16_t pixel,
+	uint8_t brightness)
+{
+	dotstar_set_pixel_brightness(pixel,brightness);
+}
+
+/*!
+ *	@brief		get led pixel red
+ *	@details
+ *	@param		[in] pixel: uint16_t pixel number
+ *	@retval		r: uint8_t
+ *	@test
+**/
+
+uint8_t usps_bb_led_get_pixel_red(
+	uint16_t pixel)
+{
+	return dotstar_get_pixel_red(pixel);
+}
+
+/*!
+ *	@brief		get led pixel green 
+ *	@details
+ *	@param		[in] pixel: uint16_t pixel number
+ *	@retval		g: uint8_t
+ *	@test
+**/
+
+uint8_t usps_bb_led_get_pixel_green(
+	uint16_t pixel)
+{
+	return dotstar_get_pixel_green(pixel);
+}
+
+
+/*!
+ *	@brief		get led pixel blue
+ *	@details
+ *	@param		[in] pixel: uint16_t pixel number
+ *	@retval		b: uint8_t
+ *	@test
+**/
+
+uint8_t usps_bb_led_get_pixel_blue(
+	uint16_t pixel)
+{
+	return dotstar_get_pixel_blue(pixel);
+}
+
+
+/*!
+ *	@brief		get led pixel brightness
+ *	@details
+ *	@param		[in] pixel: uint16_t pixel number
+ *	@retval		brightness: uint8_t
+ *	@test
+**/
+
+uint8_t usps_bb_led_get_pixel_brightness(
+	uint16_t pixel)
+{
+	return dotstar_get_pixel_brightness(pixel);
+}
+
+/*!
+ *	@brief		set led strip
+ *	@details
+ *	@param		[in] r: uint8_t red
+ *	@param		[in] g: uint8_t green
+ *	@param		[in] b: uint8_t blue
+ *	@param		[in] brightness: uint8_t brightness maximum 15
+ *	@retval		none
+ *	@test
+**/
+
+void usps_bb_led_set(
+	uint8_t r,
+	uint8_t g,
+	uint8_t b,
+	uint8_t brightness)
+{
+	dotstar_set_strip(r,g,b,brightness);
+}
+
+/*!
+ *	@brief		push led pixel to front
+ *	@details
+ *	@param		[in] r: uint8_t red
+ *	@param		[in] g: uint8_t green
+ *	@param		[in] b: uint8_t blue
+ *	@param		[in] brightness: uint8_t brightness maximum 15
+ *	@retval		none
+ *	@test
+**/
+
+void usps_bb_led_push_pixel_front(
+	uint8_t r,
+	uint8_t g,
+	uint8_t b,
+	uint8_t brightness)
+{
+	dotstar_strip_push_pixel_front(r,g,b,brightness);
+}
+
+/*!
+ *	@brief		push led pixel to back 
+ *	@details
+ *	@param		[in] r: uint8_t red
+ *	@param		[in] g: uint8_t green
+ *	@param		[in] b: uint8_t blue
+ *	@param		[in] brightness: uint8_t brightness maximum 15
+ *	@retval		none
+ *	@test
+**/
+
+void usps_bb_led_push_pixel_back(
+	uint8_t r,
+	uint8_t g,
+	uint8_t b,
+	uint8_t brightness)
+{
+	dotstar_strip_push_pixel_back(r,g,b,brightness);
+}
+
+/*!
+ *	@brief		rotate left
+ *	@details
+ *	@retval		none
+ *	@test
+**/
+
+void usps_bb_led_rotate_left()
+{
+	dotstar_strip_rotate_left();
+}
+
+/*!
+ *	@brief		rotate right
+ *	@details
+ *	@retval		none
+ *	@test
+**/
+
+void usps_bb_led_rotate_right()
+{
+	dotstar_strip_rotate_right();
+}
+
+/*!
+ *	@brief		set backlight brightness
+ *	@details
+ *	@param		[in] brightness: uint8_t brightness
+ *	@retval		none
+ *	@test
+**/
+
+void usps_bb_backlight_set_brightness(
+	uint8_t brightness)
+{
+	SetBrightness(brightness,BACKLIGHT_BRIGHTNESS_MIN,false);
+}
+
+/*!
+ *	@brief		set backlight grayscale
+ *	@details
+ *	@param		[in] grayscale: uint16_t grayscale
+ *	@retval		none
+ *	@test
+**/
+
+void usps_bb_backlight_set_grayscale(
+	uint16_t grayscale)
+{
+	SetGrayscale(grayscale,BACKLIGHT_GRAYSCALE_MIN,false);
+}
+
+/*!
+ *	@brief		show backlight
+ *	@details
+ *	@retval		none
+ *	@test
+**/
+
+void usps_bb_backlight_show()
+{
+	BacklightfUpdateLEDs();
+}
+
+/*!
+ *	@brief		get backlight brightness
+ *	@details
+ *	@retval		uint8_t	
+ *	@test
+**/
+
+uint8_t usps_bb_backlight_get_brightness()
+{
+	return GetBrightness1();
+}
+
+/*!
+ *	@brief		get backlight grayscale
+ *	@details
+ *	@retval		uint16_t	
+ *	@test
+**/
+
+uint16_t usps_bb_backlight_get_grayscale()
+{
+	return GetGrayscale1();
+}
+
+/*!
+ *	@brief		set display text
+ *	@details	use "\x23" for example to set non-ascii segments
+ *	@param		[in] text: char *text
+ *	@retval		none
+ *	@test
+**/
+
+void usps_bb_backlight_display(
+	const char *text)
+{
+}
+
+/*!
+ *	@brief		get scale weight
+ *	@details	ounces
+ *	@retval		uint16_t	
+ *	@test
+**/
+
+uint16_t usps_bb_backlight_scale()
+{
+	return 0;
+}
+
+

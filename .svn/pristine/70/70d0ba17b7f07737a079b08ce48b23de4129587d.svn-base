@@ -1,0 +1,164 @@
+#ifndef DOTSTAR_BBB_H
+#define DOTSTAR_BBB_H
+
+#define PIXEL_MAX_BRIGHTNESS 15
+
+#include <stdint.h>
+
+/*
+@brief Opens the SPI device.
+
+@param device  The device string, such as /dev/spidev1.0
+@param frequency  The SPI clock frequency in Hz. Actual speed may be lower
+                  because hardware SPI speed is a function of the system core
+                  frequency and the smallest power-of-two prescaler
+                  that will not exceed the requested rate.
+@param numLEDs  The number of LEDs in the strip. Must be > 0.
+@return 0 on success, nonzero otherwise
+*/
+int dotstar_create(const char * device,
+                   uint32_t frequency,
+                   uint32_t numLEDs);
+
+/*
+@brief Close the SPI device and free all resources.
+*/
+void dotstar_destroy();
+
+/*
+@breief Clear the entire LED strip. Just clears the buffer and does not
+        write to the strip
+*/
+void dotstar_clear();
+
+/*
+@brief Write the internal buffer to the LED strip.
+*/
+void dotstar_show();
+
+/*
+@brief Set a pixel to a given color and brightness
+
+@param p  The pixel index, starting at 0
+@param r  red
+@param g  green
+@param b  blue
+@param brightness  The global brightness of the pixel, independent of color.
+                   Max brightness is 15.
+*/
+void dotstar_set_pixel(uint16_t p, uint8_t r, uint8_t g, uint8_t b, uint8_t brightness);
+
+/*
+@brief Set the red component of a pixel
+
+@param p  The pixel index, starting at 0
+@param r  red
+*/
+void dotstar_set_pixel_red(uint16_t p, uint8_t r);
+
+/*
+@brief Set the green component of a pixel
+
+@param p  The pixel index, starting at 0
+@param g  green
+*/
+void dotstar_set_pixel_green(uint16_t p, uint8_t g);
+
+/*
+@brief Set the blue component of a pixel
+
+@param p  The pixel index, starting at 0
+@param b  blue
+*/
+void dotstar_set_pixel_blue(uint16_t p, uint8_t b);
+
+/*
+@brief Set the global brightness of a pixel
+
+@param p  The pixel index, starting at 0
+@param brightness  The global brightness of the pixel, independent of color.
+                   Max brightness is 15.
+*/
+void dotstar_set_pixel_brightness(uint16_t p, uint8_t brightness);
+
+/*
+@brief Get the red component of a pixel
+
+@param p  The pixel index, starting at 0
+@return red value of the pixel
+*/
+uint8_t dotstar_get_pixel_red(uint16_t p);
+
+/*
+@brief Get the green component of a pixel
+
+@param p  The pixel index, starting at 0
+@return green value of the pixel
+*/
+uint8_t dotstar_get_pixel_green(uint16_t p);
+
+/*
+@brief Get the blue component of a pixel
+
+@param p  The pixel index, starting at 0
+@return blue value of the pixel
+*/
+uint8_t dotstar_get_pixel_blue(uint16_t p);
+
+/*
+@brief Get the global brightness of a pixel
+
+@param p  The pixel index, starting at 0
+@return brightness  The global brightness of the pixel, independent of color.
+                    Max brightness is 15.
+*/
+uint8_t dotstar_get_pixel_brightness(uint16_t p);
+
+/*
+@brief Set the whole strip to a given color and brightness
+
+@param r  red
+@param g  green
+@param b  blue
+@param brightness  The global brightness, independent of color.
+                   Max brightness is 15.
+*/
+void dotstar_set_strip(uint8_t r, uint8_t g, uint8_t b, uint8_t brightness);
+
+/*
+@brief Push a pixel into the front of the strip and move all other pixels
+       over. The pixel at the end is dropped.
+
+@param r  red
+@param g  green
+@param b  blue
+@param brightness  The global brightness of the pixel, independent of color.
+                   Max brightness is 15.
+*/
+void dotstar_strip_push_pixel_front(uint8_t r, uint8_t g, uint8_t b, uint8_t brightness);
+
+/*
+@brief Push a pixel into the back of the strip and move all other pixels
+       over. The pixel at the front is dropped.
+
+@param r  red
+@param g  green
+@param b  blue
+@param brightness  The global brightness of the pixel, independent of color.
+                   Max brightness is 15.
+*/
+void dotstar_strip_push_pixel_back(uint8_t r, uint8_t g, uint8_t b, uint8_t brightness);
+
+/*
+@brief Rotate the entire strip to the left. The pixel on the leftmost side is
+       moved to the right side. Left is defined as index 0.
+*/
+void dotstar_strip_rotate_left();
+
+/*
+@brief Rotate the entire strip to the right. The pixel on the rightmost side is
+       moved to the left side. Left is defined as index 0.
+*/
+void dotstar_strip_rotate_right();
+
+#endif

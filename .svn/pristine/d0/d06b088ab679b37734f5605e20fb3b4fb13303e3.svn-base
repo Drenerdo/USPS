@@ -1,0 +1,810 @@
+/*!
+ *	@file		main.c
+ *	@author		BCA
+ *	@version	1.0.0
+ *	@date		12/9/16
+ *	@brief		Source for USPS Blue Box main
+ *	@copyright	© Bay Computer Associates, Incorporated 2016
+				All rights reserved
+				This file contains CONFIDENTIAL material
+ *	@remark		Matilda USPS Blue Box
+ *	@Repository URL: $HeadURL: $
+ *	Last changed by: $Author: $
+ *	Last changed on: $Date: $
+ *	Revision:		$Rev: $
+**/
+
+#include "usps_bb_api.h"
+#include "ProjectConfig.h"
+#include "Backlight.h"
+#include "dotstar.h"
+#include "SegmentDisplay.h"
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+#include <time.h>
+
+#include <alsa/asoundlib.h>
+
+#define ALSA_ERROR(result) do {\
+		if(result)\
+			printf("%s:%s:%d: ALSA %s\n",__FILE__,__FUNCTION__,__LINE__,snd_strerror(result));\
+	} while(0)
+#define ALSA_ASSERT(condition) do {\
+		if((condition)==0)\
+			printf("%s:%s:%d: ALSA " #condition "\n",__FILE__,__FUNCTION__,__LINE__);\
+	} while(0)
+
+typedef void (*usps_bb_wrapper)(int argc,const char * argv[]);
+
+//	WRAPPER_(	command,			function)
+#define WRAPPER_LIST \
+	WRAPPER_( "api1"				,wrapper1					)\
+	WRAPPER_( "api2"				,wrapper2					)\
+	WRAPPER_( "backlight"			,wrapperBacklight			)\
+	WRAPPER_( "backlightBlink"		,wrapperBacklightBlink		)\
+	WRAPPER_( "backlightPulseGS"	,wrapperBacklightPulseGS	)\
+	WRAPPER_( "backlightPulse"		,wrapperBacklightPulse		)\
+	WRAPPER_( "dotstar"				,wrapperDotstar				)\
+	WRAPPER_( "displayInit"			,wrapperDisplayInit			)\
+	WRAPPER_( "displayText"			,wrapperDisplayText			)\
+	WRAPPER_( "displayBrightness"	,wrapperDisplayBrightness	)\
+	WRAPPER_( "displayBlink"		,wrapperDisplayBlink	)\
+//Comment terminates list macro. Do not delete.
+
+//Ouput command function prototypes.
+#define WRAPPER_(command, function) void function(int argc,const char *argv[]);
+	WRAPPER_LIST
+#undef WRAPPER_
+
+typedef struct {
+	char			*name;
+	usps_bb_wrapper	wrapper;
+} usps_bb_command;
+
+//Ouput command function lookup table.
+static const usps_bb_command  gCommands[]=
+{
+#define WRAPPER_(command, function) {command, function},
+	WRAPPER_LIST
+#undef WRAPPER_
+	{ NULL, NULL }
+};
+
+#define kFrequency	261.6	// middle C
+#define kSampleRate	44100
+#define kPeriodSize	1024
+#define kBufferSize	(4*kPeriodSize)	// ALSA latency 4x
+
+snd_pcm_t *		gPlayback=NULL;
+short			gPlaybackBuffer[kPeriodSize];
+snd_async_handler_t *	gPlaybackHandler=NULL;
+unsigned		gPlaybackBuffers=0;
+snd_pcm_t *		gCapture=NULL;
+short			gCaptureBuffer[kPeriodSize];
+snd_async_handler_t *	gCaptureHandler=NULL;
+unsigned		gCaptureBuffers=0;
+
+void initialize_audio(void);
+void done_audio(void);
+
+void playback_callback(snd_async_handler_t *handler);
+void capture_callback(snd_async_handler_t *handler);
+
+//Backlight animating functions.
+#define ANIMATION_INC_MS 17
+
+BacklightErrEnum BacklightAnimateBrightness(
+	BacklightBrightness start, 
+	BacklightBrightness end, 
+	uint32_t durationMS,
+	bool skipFirst);
+BacklightErrEnum BacklightAnimateGrayscale(
+	BacklightGrayscale start, 
+	BacklightGrayscale end, 
+	uint32_t durationMS,
+	bool skipFirst);
+BacklightErrEnum BacklightBlink(
+	BacklightBrightness brightness, 
+	BacklightGrayscale grayscale, 
+	uint32_t onMS, uint32_t offMS, int blinkCount);
+
+/*!
+ *	@brief		main
+ *	@details
+ *	@retval		int
+ *	@test
+**/
+
+int main(
+	int argc,
+	const char * argv[])
+{
+	int i;
+	const usps_bb_command * command=gCommands;
+	clock_t start,current;
+
+	printf("argc=%d\n",argc);
+	for(i=0;i<argc;i++)
+		printf("argv[%d]=%s\n",i,argv[i]);
+
+	initialize_audio();
+
+	if(argc>1) {
+		for(i=0;command->name!=NULL;i++,command++) {
+			if(strcmp(argv[1],command->name)==0) {
+				if(command->wrapper!=NULL)
+				{
+					printf("Testing: %s\n", command->name);
+					(command->wrapper)(argc,argv);
+				}
+				else
+				{
+					printf("no wrapper for '%s'\n",command->name);
+				}
+			}
+		}
+	}
+
+	start=clock();	// microseconds
+	do {
+		current=clock();
+	} while(current - start < 1*USEC_PER_SECOND);
+
+	done_audio();
+
+	return 0;
+}
+
+/*!
+ *	@brief		wrapper for api1
+ *	@details
+ *	@param		[in] argc: int argument count
+ *	@param		[in] argv: const char * argv[]
+ *	@retval		none
+ *	@test
+**/
+
+void wrapper1(
+	int argc,
+	const char * argv[])
+{
+}
+
+/*!
+ *	@brief		wrapper for api2
+ *	@details
+ *	@param		[in] argc: int argument count
+ *	@param		[in] argv: const char * argv[]
+ *	@retval		none
+ *	@test
+**/
+
+void wrapper2(
+	int argc,
+	const char * argv[])
+{
+}
+
+
+/*!
+ *	@brief		wrapper for display initialize
+ *	@details
+ *	@param		[in] argc: int argument count
+ *	@param		[in] argv: const char * argv[]
+ *	@retval		none
+ *	@test
+**/
+
+void wrapperDisplayInit(
+	int argc,
+	const char * argv[])
+{
+	usps_bb_display_initialize();
+}
+
+
+/*!
+ *	@brief		wrapper for display text
+ *	@details
+ *	@param		[in] argc: int argument count
+ *	@param		[in] argv: const char * argv[]
+ *	@retval		none
+ *	@test
+**/
+
+void wrapperDisplayText(
+	int argc,
+	const char * argv[])
+{
+	if (argc > 2)
+	{
+		usps_bb_display_text(argv[2]);
+	}
+	else
+	{
+		usps_bb_display_text("A.B.C.D.1.2.3.4.");
+	}
+}
+
+/*!
+ *	@brief		wrapper for display brightness
+ *	@details
+ *	@param		[in] argc: int argument count
+ *	@param		[in] argv: const char * argv[]
+ *	@retval		none
+ *	@test
+**/
+
+void wrapperDisplayBrightness(
+	int argc,
+	const char * argv[])
+{
+	SegDispErrEnum		err;
+	SegDispBrightness	b1, b2;
+
+	b1 = SEGDISP_BRIGHTNESS_MAX;
+	b2 = SEGDISP_BRIGHTNESS_MAX;
+
+	if (argc > 2)
+	{
+		b1 = atoi(argv[2]);
+	}
+
+	if (argc > 3)
+	{
+		b2 = atoi(argv[3]);
+	}
+	usps_bb_display_brightness(b1, b2);
+}
+
+/*!
+ *	@brief		wrapper for display blink
+ *	@details
+ *	@param		[in] argc: int argument count
+ *	@param		[in] argv: const char * argv[]
+ *	@retval		none
+ *	@test
+**/
+
+void wrapperDisplayBlink(
+	int argc,
+	const char * argv[])
+{
+	SegDispErrEnum		err;
+	SegDispBlinkEnum	rate1, rate2;
+
+	rate1 = SegDispNO_BLINK;
+	rate2 = SegDispNO_BLINK;
+
+	if (argc > 2)
+	{
+		rate1 = atoi(argv[2]);
+	}
+
+	if (argc > 3)
+	{
+		rate2 = atoi(argv[3]);
+	}
+
+	usps_bb_display_blink(rate1, rate2);
+}
+
+/*!
+ *	@brief		wrapper for backlight
+ *	@details
+ *	@param		[in] argc: int argument count
+ *	@param		[in] argv: const char * argv[]
+ *	@retval		none
+ *	@test
+**/
+
+void wrapperBacklight(
+	int argc,
+	const char * argv[])
+{
+	uint8_t		brightness = BACKLIGHT_BRIGHTNESS_MAX;
+	uint16_t	grayscale = BACKLIGHT_GRAYSCALE_MAX;
+
+	if (argc > 2)
+	{
+		brightness = atoi(argv[2]);
+	}
+	if (argc > 3)
+	{
+		grayscale = atoi(argv[3]);
+	}
+	usps_bb_backlight_set_brightness(brightness);
+	usps_bb_backlight_set_grayscale(grayscale);
+	usps_bb_backlight_show();
+}
+
+/*!
+ *	@brief		wrapper for backlight blink
+ *	@details
+ *	@param		[in] argc: int argument count
+ *	@param		[in] argv: const char * argv[]
+ *	@retval		none
+ *	@test
+**/
+
+void wrapperBacklightBlink(
+	int argc,
+	const char * argv[])
+{
+	BacklightErrEnum	err;
+	uint32_t			onMS = 1 * MSECS_PER_SECOND;
+	uint32_t			offMS = 1 * MSECS_PER_SECOND;
+	int					blinkCount = 3;
+
+	if (argc > 2)
+	{
+		onMS = atoi(argv[2]);
+		if (argc > 3)
+		{
+			offMS = atoi(argv[3]);
+			if (argc > 4)
+			{
+				blinkCount = atoi(argv[4]);
+			}
+		}
+	}
+	err = BacklightBlink( BACKLIGHT_BRIGHTNESS_MAX, BACKLIGHT_GRAYSCALE_MAX, 
+							onMS, offMS, blinkCount);
+	if (BacklightNoErr != err)
+	{
+		printf("Backlight blink: %s\n", BacklightErrDesc(err));
+	}
+}
+
+
+/*!
+ *	@brief		wrapper for backlight pulse
+ *	@details
+ *	@param		[in] argc: int argument count
+ *	@param		[in] argv: const char * argv[]
+ *	@retval		none
+ *	@test
+**/
+
+void wrapperBacklightPulse(
+	int argc,
+	const char * argv[])
+{
+	BacklightErrEnum	err;
+	int					i;
+	int					durationMS = 1000;
+
+	if (argc > 2)
+	{
+		durationMS = atoi(argv[2]);
+	}
+
+	for (i = 0; i < 5; i++)
+	{
+		err = BacklightAnimateBrightness(BACKLIGHT_BRIGHTNESS_MIN, BACKLIGHT_BRIGHTNESS_MAX, 
+			durationMS / 2, false);
+		if (BacklightNoErr != err)
+		{
+			printf("Fade brightness: %s\n", BacklightErrDesc(err));
+			break;
+		}
+		err = BacklightAnimateBrightness(BACKLIGHT_BRIGHTNESS_MAX, BACKLIGHT_BRIGHTNESS_MIN, 
+			durationMS - (durationMS / 2), true);
+		if (BacklightNoErr != err)
+		{
+			printf("Fade brightness: %s\n", BacklightErrDesc(err));
+			break;
+		}
+	}
+}
+
+/*!
+ *	@brief		wrapper for backlight pulse gs
+ *	@details
+ *	@param		[in] argc: int argument count
+ *	@param		[in] argv: const char * argv[]
+ *	@retval		none
+ *	@test
+**/
+
+void wrapperBacklightPulseGS(
+	int argc,
+	const char * argv[])
+{
+	BacklightErrEnum	err;
+	int					i;
+	int					durationMS = 1000;
+
+	if (argc > 2)
+	{
+		durationMS = atoi(argv[2]);
+	}
+
+	for (i = 0; i < 5; i++)
+	{
+		err = BacklightAnimateGrayscale(BACKLIGHT_GRAYSCALE_MIN, BACKLIGHT_GRAYSCALE_MAX, 
+			durationMS / 2, false);
+		if (BacklightNoErr != err)
+		{
+			printf("Fade grayscale: %s\n", BacklightErrDesc(err));
+			break;
+		}
+		err = BacklightAnimateGrayscale(BACKLIGHT_GRAYSCALE_MAX, BACKLIGHT_GRAYSCALE_MIN, 
+			durationMS - (durationMS / 2), true);
+		if (BacklightNoErr != err)
+		{
+			printf("Fade grayscale: %s\n", BacklightErrDesc(err));
+			break;
+		}
+	}
+}
+
+/*!
+ *	@brief		wrapper for dotstar
+ *	@details
+ *	@param		[in] argc: int argument count
+ *	@param		[in] argv: const char * argv[]
+ *	@retval		none
+ *	@test
+**/
+
+void wrapperDotstar(
+	int argc,
+	const char * argv[])
+{
+	const int cNumLEDs=240;
+	const int cCenter=5;
+	int test=0;
+	int i;
+	struct timespec tim;
+	tim.tv_sec=0;
+	tim.tv_nsec=1000*10000;
+
+	if(argc>2)
+		test=atoi(argv[2]);
+	printf("dotstar test=%d\n",test);
+
+	dotstar_create("/dev/spidev1.0", 5000000, cNumLEDs);
+
+    // Initialization for the tests
+    switch(test) {
+    case 0:
+        break;
+    case 1:
+        dotstar_set_strip(0,0,0,0);
+        for (i = 0; i < cCenter; i++) {
+            dotstar_strip_push_pixel_front(255,255,0,15);
+        }
+        break;
+    default:
+        break;
+    }
+
+	dotstar_show();
+
+	while(1) {
+		switch(test) {
+			case 0:
+          			for (i = 0; i < 256; i+=2) {
+                			dotstar_set_strip(0, 0, i, 15);
+                			dotstar_show();
+                			nanosleep(&tim, NULL);
+            			}
+            			for (i = 255; i > 0; i-=2) {
+               				dotstar_set_strip(0, 0, i, 15);
+                			dotstar_show();
+               				nanosleep(&tim, NULL);
+           			}
+				break;
+			case 1:
+           			for (i = 0; i < cNumLEDs-cCenter; i++) {
+           				dotstar_strip_rotate_right();
+               				dotstar_show();
+                			nanosleep(&tim, NULL);
+            			}
+            			for (i = 0; i < cNumLEDs-cCenter; i++) {
+                			dotstar_strip_rotate_left();
+                			dotstar_show();
+                			nanosleep(&tim, NULL); }
+				break;
+			default:
+				break;
+		}
+	}
+
+	dotstar_destroy();
+}
+
+/*!
+ *	@brief		asynchronous playback callback
+ *	@details	ALSA callback writes sine wave to audio output
+ *	@param		[in] handler: snd_async_handler_t *handler
+ *	@retval		none
+ *	@test
+**/
+
+void playback_callback(
+	snd_async_handler_t *handler)
+{
+	static float sPhase=0.0f;
+
+	snd_pcm_t *pcm=snd_async_handler_get_pcm(handler);
+	void *data=snd_async_handler_get_callback_private(handler);
+	//int fd=snd_async_handler_get_fd(handler);
+	//int signo=snd_async_handler_get_signo(handler);
+
+	snd_pcm_sframes_t available=snd_pcm_avail_update(gPlayback);
+	while(available>kPeriodSize) {
+		for(int i=0;i<kPeriodSize;i++) {
+			float data=sinf(2.0f*sPhase*M_PI);
+			sPhase+=kFrequency/kSampleRate;
+			if(sPhase>=1.0f) sPhase-=2.0f;
+
+			gPlaybackBuffer[i]=(short)(data*32767.0f);
+		}
+
+		snd_pcm_sframes_t frames=snd_pcm_writei(gPlayback,gPlaybackBuffer,kPeriodSize);
+		ALSA_ASSERT(frames==kPeriodSize);
+
+		available=snd_pcm_avail_update(gPlayback);
+	}
+
+	gPlaybackBuffers++;
+}
+
+/*!
+ *	@brief		asynchronous capture callback
+ *	@details	ALSA
+ *	@param		[in] handler: snd_async_handler_t *handler
+ *	@retval		none
+ *	@todo		not finished
+ *	@test
+**/
+
+void capture_callback(
+	snd_async_handler_t *handler)
+{
+	gCaptureBuffers++;
+}
+
+/*!
+ *	@brief		initialize audio
+ *	@details	ALSA
+ *	@retval		none
+ *	@todo		audio capture not finished
+ *	@test
+**/
+
+void initialize_audio()
+{
+	int result,card=-1;
+	snd_pcm_uframes_t bufferSize,periodSize;
+	snd_pcm_sframes_t frames;
+
+	printf("ALSA version=%s\n",snd_asoundlib_version());
+
+	while(1) {
+		char *name,*device;
+		void **hints,**h;
+
+		result=snd_card_next(&card);
+		if(card== -1) break;
+		ALSA_ERROR(result);
+		result=snd_card_get_name(card,&name);
+		ALSA_ERROR(result);
+		printf("card %d: '%s'\n",card,name);
+
+		result=snd_device_name_hint(card,"pcm",&hints);
+		ALSA_ERROR(result);
+
+		h=hints;
+		while(h!=NULL && *h!=NULL) {
+			device=snd_device_name_get_hint(*h++,"NAME");
+			printf("card %d: device '%s'\n",card,(device!=NULL)?device:"?");
+			free(device);
+		}
+
+		result=snd_device_name_free_hint(hints);
+		ALSA_ERROR(result);
+
+		free(name);
+	}
+	
+	result=snd_pcm_open(&gPlayback,"plughw:CARD=Set,DEV=0",SND_PCM_STREAM_PLAYBACK,0);
+	ALSA_ERROR(result);
+	
+	result=snd_pcm_set_params(gPlayback,
+		SND_PCM_FORMAT_S16_LE,			// format
+		SND_PCM_ACCESS_RW_INTERLEAVED,		// access
+		1,					// number of channels
+		kSampleRate,				// sample rate
+		0,					// don't allow resampling
+		kBufferSize*1000000LL/kSampleRate);	// latency in microseconds
+	ALSA_ERROR(result);
+
+	result=snd_pcm_get_params(gPlayback,
+		&bufferSize,
+		&periodSize);
+	ALSA_ERROR(result);
+	ALSA_ASSERT(bufferSize==kBufferSize);
+	ALSA_ASSERT(periodSize==kPeriodSize);
+	printf("bufferSize=%d periodSize=%d\n",bufferSize,periodSize);
+
+	result=snd_pcm_prepare(gPlayback);
+	ALSA_ERROR(result);
+
+	frames=snd_pcm_writei(gPlayback,gPlaybackBuffer,kPeriodSize);
+	ALSA_ASSERT(frames==kPeriodSize);
+	frames=snd_pcm_writei(gPlayback,gPlaybackBuffer,kPeriodSize);
+	ALSA_ASSERT(frames==kPeriodSize);
+
+	result=snd_async_add_pcm_handler(&gPlaybackHandler,gPlayback,playback_callback,NULL);
+	ALSA_ERROR(result);
+
+	result=snd_pcm_start(gPlayback);
+	ALSA_ERROR(result);
+} 
+
+/*!
+ *	@brief		done audio
+ *	@details	ALSA
+ *	@retval		none
+ *	@test
+**/
+
+void done_audio()
+{
+	int result=snd_pcm_drop(gPlayback);
+	ALSA_ERROR(result);
+
+	result=snd_async_del_handler(gPlaybackHandler);
+	ALSA_ERROR(result);
+	gPlaybackHandler=NULL;
+
+	result=snd_pcm_close(gPlayback);
+	ALSA_ERROR(result);
+	gPlayback=NULL;
+
+	printf("playback buffers=%d\n",gPlaybackBuffers);
+}
+
+/*!
+ *	@brief		backlight animate brightness
+ *	@details	
+ *	@param		[in] start: BacklightBrightness start
+ *	@param		[in] end: BacklightBrightness end
+ *	@param		[in] durationMS: uint32_t duration milliseconds
+ *	@param		[in] skipFirst: bool skip first
+ *	@retval		BacklightErrEnum
+ *	@test
+**/
+
+BacklightErrEnum BacklightAnimateBrightness(
+	BacklightBrightness start, 
+	BacklightBrightness end, 
+	uint32_t durationMS,
+	bool skipFirst)
+{
+	int						i;
+	int						steps;
+	const struct timespec	timeDelay = {0, ANIMATION_INC_MS * NSEC_PER_MSECS};
+	struct timespec			timeRemaining;
+	BacklightBrightness		current;
+	long					range;
+	BacklightErrEnum		err;
+
+	err = BacklightNoErr;
+	range = end - start;
+	steps = durationMS / ANIMATION_INC_MS;
+	for	(i = skipFirst ? 1 : 0; i < steps; i++)
+	{
+		current = start + ((i * range) / steps);
+
+		err = SetBrightness(current, BACKLIGHT_BRIGHTNESS_MIN, true);
+		if (BacklightNoErr != err)
+		{
+			break;
+		}
+		nanosleep(&timeDelay, &timeRemaining);
+	}
+	if (current != end)
+		err = SetBrightness(end, BACKLIGHT_BRIGHTNESS_MIN, true);
+
+	return err;
+}
+
+/*!
+ *	@brief		backlight animate grayscale
+ *	@details	
+ *	@param		[in] start: BacklightGrayscale start
+ *	@param		[in] end: BacklightGrayscale end
+ *	@param		[in] durationMS: uint32_t duration milliseconds
+ *	@param		[in] skipFirst: bool skip first
+ *	@retval		BacklightErrEnum
+ *	@test
+**/
+
+BacklightErrEnum BacklightAnimateGrayscale(
+	BacklightGrayscale start, 
+	BacklightGrayscale end, 
+	uint32_t durationMS,
+	bool skipFirst)
+{
+	int						i;
+	int						steps;
+	const struct timespec	timeDelay = {0, ANIMATION_INC_MS * NSEC_PER_MSECS};
+	struct timespec			timeRemaining;
+	BacklightGrayscale		current;
+	long					range;
+	BacklightErrEnum		err;
+
+	err = BacklightNoErr;
+	range = end - start;
+	steps = durationMS / ANIMATION_INC_MS;
+	for	(i = skipFirst ? 1 : 0; i < steps; i++)
+	{
+		current = start + ((i * range) / steps);
+
+		err = SetGrayscale(current, BACKLIGHT_GRAYSCALE_MIN, true);
+		if (BacklightNoErr != err)
+		{
+			break;
+		}
+		nanosleep(&timeDelay, &timeRemaining);
+	}
+	if (current != end)
+		err = SetGrayscale(end, BACKLIGHT_GRAYSCALE_MIN, true);
+
+	return err;
+}
+
+/*!
+ *	@brief		backlight blink
+ *	@details	
+ *	@param		[in] start: BacklightBrightness brightness
+ *	@param		[in] end: BacklightGrayscale grayscale
+ *	@param		[in] onMS: uint32_t on milliseconds
+ *	@param		[in] offMS: uint32_t off milliseconds
+ *	@param		[in] blinkCount: int blink count
+ *	@retval		BacklightErrEnum
+ *	@test
+**/
+
+BacklightErrEnum BacklightBlink(
+	BacklightBrightness brightness, 
+	BacklightGrayscale grayscale, 
+	uint32_t onMS, uint32_t offMS, int blinkCount)
+{
+	BacklightErrEnum	err;
+	int					iBlink;
+	struct timespec		timeDelay = {0, 0};
+	struct timespec		timeRemaining;
+
+	//Set the grayscale to the on value and then blink using brightness.
+	err = SetGrayscale(grayscale, BACKLIGHT_GRAYSCALE_MIN, false);
+
+	err = SetBrightness(BACKLIGHT_BRIGHTNESS_MIN, BACKLIGHT_BRIGHTNESS_MIN, true);
+	if (BacklightNoErr != err) return err;
+
+	for (iBlink = 0; iBlink < blinkCount; iBlink++)
+	{
+		timeDelay.tv_sec = offMS / MSECS_PER_SECOND;
+		timeDelay.tv_nsec = (offMS % MSECS_PER_SECOND) * NSEC_PER_MSECS;
+		nanosleep(&timeDelay, &timeRemaining);
+
+		err = SetBrightness(brightness, BACKLIGHT_BRIGHTNESS_MIN, true);
+		if (BacklightNoErr != err) return err;
+
+		timeDelay.tv_sec = onMS / MSECS_PER_SECOND;
+		timeDelay.tv_nsec = (onMS % MSECS_PER_SECOND) * NSEC_PER_MSECS;
+		nanosleep(&timeDelay, &timeRemaining);
+
+		err = SetBrightness(BACKLIGHT_BRIGHTNESS_MIN, BACKLIGHT_BRIGHTNESS_MIN, true);
+		if (BacklightNoErr != err) return err;
+	}
+
+	return err;
+}

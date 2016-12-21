@@ -1,0 +1,990 @@
+/*!
+ *	@file		main.c
+ *	@author		BCA
+ *	@version	1.0.0
+ *	@date		12/9/16
+ *	@brief		Source for USPS Blue Box main
+ *	@copyright	© Bay Computer Associates, Incorporated 2016
+				All rights reserved
+				This file contains CONFIDENTIAL material
+ *	@remark		Matilda USPS Blue Box
+ *	@Repository URL: $HeadURL: $
+ *	Last changed by: $Author: $
+ *	Last changed on: $Date: $
+ *	Revision:		$Rev: $
+**/
+
+/**
+ *	@mainpage	Matilda USPS Blue Box Software
+ *	@tableofcontents
+ *	@section	main_section Command line test usage
+ *				When this test application is run from the command line, tests
+ *				of the API can be selected.  A full amplitude sine wave audio
+ *				at 261.6 hz is always output.
+ *	@subsection backlight_subsection Backlight
+ *		@verbatim
+ 				./test backlight [brightness [grayscale]]
+ 		@endverbatim
+ *				Set backlight brightness (0-127) and grayscale (0-65535).
+ *	@subsection backlight_blink_subsection Backlight Blink
+ *		@verbatim
+ 				./test backlightBlink [onMS [offMS [count]]]
+ 		@endverbatim
+ *				Set backlight blink.  onMS and offMS default 1000, count default
+ *				is 3.
+ *	@subsection backlight_pulsegs_subsection Backlight PulseGS
+ *		@verbatim
+ 				./test backlightPulseGS [durationMS]
+ 		@endverbatim
+ *				Pulse backlight grayscale 5 times.  Default durationMS is 1000.
+ *	@subsection backlight_pulse_subsection Backlight Pulse
+ *		@verbatim
+ 				./test backlightPulse [durationMS]
+ 		@endverbatim
+ *				Pulse backlight brightness 5 times.  Default durationMS is 1000.
+ *	@subsection backlight_dotstar_subsection Dotstar
+ *		@verbatim
+ 				./test dotstar [test]
+ 		@endverbatim
+ *				Test the LED strip.  Default test is 0.
+ *					- 0 fade brightness
+ *					- 1 rotate
+ *	@subsection backlight_displayinit_subsection Display Init
+ *		@verbatim
+ 				./test displayInit
+ 		@endverbatim
+ *				Clears the text.  Must be called before other text commands.
+ *	@subsection backlight_displaytext_subsection Display Text
+ *		@verbatim
+ 				./test displayText [text]
+ 		@endverbatim
+ *				Display the text.  The default text is "A.B.C.D.1.2.3.4".
+ *	@subsection backlight_displaybrightness_subsection Display Brightness
+ 		@verbatim
+ 				./test displayBrightness {brightness1 [brightness2]]
+ 		@endverbatim
+ *				Set the brightness of the text.  Brightness1 left half, brightness2
+ *				right half.
+ *	@subsection backlight_displayblink_subsection Display Blink
+ 		@verbatim
+ 				./test displayBlink [rate1 [rate2]]
+ 		@endverbatim
+ *				Blink the text.
+ *					- 0 on, no blink
+ *					- 1 on, 2 Hz blink
+ *					- 2 on, 1 Hz blink
+ *					- 3 on, 0.5 Hz blink
+ *					- 4 off
+ *					.
+ *	@section	api_section API
+ *				@ref usps_bb.api.h and @ref usps_bb_api.c contains the API to
+ *				be used by the application.
+**/
+
+
+#include "usps_bb_api.h"
+#include "ProjectConfig.h"
+#include "Backlight.h"
+#include "dotstar.h"
+#include "SegmentDisplay.h"
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+#include <time.h>
+
+#include <alsa/asoundlib.h>
+
+#define ALSA_ERROR(result) do {\
+		if(result)\
+			printf("%s:%s:%d: ALSA %s\n",__FILE__,__FUNCTION__,__LINE__,snd_strerror(result));\
+	} while(0)
+#define ALSA_ASSERT(condition) do {\
+		if((condition)==0)\
+			printf("%s:%s:%d: ALSA " #condition "\n",__FILE__,__FUNCTION__,__LINE__);\
+	} while(0)
+
+typedef void (*usps_bb_wrapper)(int argc,const char * argv[]);
+
+//	WRAPPER_(	command,			function)
+#define WRAPPER_LIST \
+	WRAPPER_( "api1"				,wrapper1					)\
+	WRAPPER_( "api2"				,wrapper2					)\
+	WRAPPER_( "backlight"			,wrapperBacklight			)\
+	WRAPPER_( "backlightBlink"		,wrapperBacklightBlink		)\
+	WRAPPER_( "backlightPulseGS"	,wrapperBacklightPulseGS	)\
+	WRAPPER_( "backlightPulse"		,wrapperBacklightPulse		)\
+	WRAPPER_( "dotstar"				,wrapperDotstar				)\
+	WRAPPER_( "displayInit"			,wrapperDisplayInit			)\
+	WRAPPER_( "displayText"			,wrapperDisplayText			)\
+	WRAPPER_( "displayBrightness"	,wrapperDisplayBrightness	)\
+	WRAPPER_( "displayBlink"		,wrapperDisplayBlink	)\
+//Comment terminates list macro. Do not delete.
+
+//Ouput command function prototypes.
+#define WRAPPER_(command, function) void function(int argc,const char *argv[]);
+	WRAPPER_LIST
+#undef WRAPPER_
+
+typedef struct {
+	char			*name;
+	usps_bb_wrapper	wrapper;
+} usps_bb_command;
+
+//Ouput command function lookup table.
+static const usps_bb_command  gCommands[]=
+{
+#define WRAPPER_(command, function) {command, function},
+	WRAPPER_LIST
+#undef WRAPPER_
+	{ NULL, NULL }
+};
+
+#define kFrequency	261.6	// middle C
+#define kSampleRate	44100
+#define kPeriodSize	1024
+#define kBufferSize	(4*kPeriodSize)	// ALSA latency 4x
+
+snd_pcm_t *		gPlayback=NULL;
+short			gPlaybackBuffer[kPeriodSize];
+snd_async_handler_t *	gPlaybackHandler=NULL;
+unsigned		gPlaybackBuffers=0;
+snd_pcm_t *		gCapture=NULL;
+short			gCaptureBuffer[kPeriodSize];
+snd_async_handler_t *	gCaptureHandler=NULL;
+unsigned		gCaptureBuffers=0;
+
+void initialize_audio(void);
+void done_audio(void);
+
+void playback_callback(snd_async_handler_t *handler);
+void capture_callback(snd_async_handler_t *handler);
+
+//Backlight animating functions.
+#define ANIMATION_INC_MS 17
+
+BacklightErrEnum BacklightAnimateBrightness(
+	BacklightBrightness start, 
+	BacklightBrightness end, 
+	uint32_t durationMS,
+	bool skipFirst);
+BacklightErrEnum BacklightAnimateGrayscale(
+	BacklightGrayscale start, 
+	BacklightGrayscale end, 
+	uint32_t durationMS,
+	bool skipFirst);
+BacklightErrEnum BacklightBlink(
+	BacklightBrightness brightness, 
+	BacklightGrayscale grayscale, 
+	uint32_t onMS, uint32_t offMS, int blinkCount);
+
+/*!
+ *	@brief		main
+ *	@details
+ *	@retval		int
+ *	@test
+**/
+
+int main(
+	int argc,
+	const char * argv[])
+{
+	int i;
+	const usps_bb_command * command=gCommands;
+	clock_t start,current;
+
+	printf("argc=%d\n",argc);
+	for(i=0;i<argc;i++)
+		printf("argv[%d]=%s\n",i,argv[i]);
+
+	initialize_audio();
+
+	if(argc>1) {
+		for(i=0;command->name!=NULL;i++,command++) {
+			if(strcmp(argv[1],command->name)==0) {
+				if(command->wrapper!=NULL)
+				{
+					printf("Testing: %s\n", command->name);
+					(command->wrapper)(argc,argv);
+				}
+				else
+				{
+					printf("no wrapper for '%s'\n",command->name);
+				}
+			}
+		}
+	}
+
+	start=clock();	// microseconds
+	do {
+		current=clock();
+	} while(current - start < 1*USEC_PER_SECOND);
+
+	done_audio();
+
+	return 0;
+}
+
+/*!
+ *	@brief		wrapper for api1
+ *	@details
+ *	@param		[in] argc: int argument count
+ *	@param		[in] argv: const char * argv[]
+ *	@retval		none
+ *	@test
+**/
+
+void wrapper1(
+	int argc,
+	const char * argv[])
+{
+}
+
+/*!
+ *	@brief		wrapper for api2
+ *	@details
+ *	@param		[in] argc: int argument count
+ *	@param		[in] argv: const char * argv[]
+ *	@retval		none
+ *	@test
+**/
+
+void wrapper2(
+	int argc,
+	const char * argv[])
+{
+}
+
+/*!
+*	@brief		displayInit 
+*	@details
+The command initializes the text display. It must be called before any other
+display commands.
+
+The two text LEDs are set to a known configuration. The display buffer is 
+cleared. The brightness is set to maximum. The blink rate is set to 0
+(not blinking).
+*/
+void wrapperDisplayInit(
+	int argc,
+	const char * argv[])
+{
+	usps_bb_display_initialize();
+}
+
+/*!
+*	@brief		displayText [text]
+*	@details
+The command displays text on the display. If no text parameter is 
+provided, default text is displayed. The default text is 
+"A.B.C.D.1.2.3.4.", which uses every character and every decimal point
+of the display.
+*/
+void wrapperDisplayText(
+	int argc,
+	const char * argv[])
+{
+	if (argc > 2)
+	{
+		usps_bb_display_text(argv[2]);
+	}
+	else
+	{
+		usps_bb_display_text("A.B.C.D.1.2.3.4.");
+	}
+}
+
+/*!
+*	@brief		displayBrightness [brightness1 [brightness2]]
+*	@details
+The command sets the brightness of the display. The display is actually
+comprised of two character LEDs and each brightness may be controlled
+separately and simultaneously. The default is full brightness.
+
+If the first brightness parameter is provided then it will control only
+the first LED, which should be the left half of the display. If the 
+second brightness parameter is provided then it will control the second
+LED, which should be the right half of the display.
+
+The brightness values are in the range of 0-15. Note that 0 is not off.
+To clear an LED, set its text to spaces or use the displayBlink command.
+If the value > 15 then it will be ignored. This allows the first LED to
+be left at its current brightness while controlling only the second.
+*/
+void wrapperDisplayBrightness(
+	int argc,
+	const char * argv[])
+{
+	SegDispErrEnum		err;
+	SegDispBrightness	b1, b2;
+
+	b1 = SEGDISP_BRIGHTNESS_MAX;
+	b2 = SEGDISP_BRIGHTNESS_MAX;
+
+	if (argc > 2)
+	{
+		b1 = atoi(argv[2]);
+	}
+
+	if (argc > 3)
+	{
+		b2 = atoi(argv[3]);
+	}
+	usps_bb_display_brightness(b1, b2);
+}
+
+/*!
+*	@brief		displayBlink [rate1 [rate2]]
+*	@details
+The command sets the blink rate of the display. The display is actually
+comprised of two character LEDs and each rate may be controlled
+separately and simultaneously. The default is to not blink.
+
+If the first rate parameter is provided then it will control only
+the first LED, which should be the left half of the display. If the 
+second rate parameter is provided then it will control the second
+LED, which should be the right half of the display.
+
+There are five settings (0-4), as indicated in the following table.
+		PARAMETER	|	DISPLAY	|	RATE
+		0			|	on		|	Not blinking
+		1			|	on		|	2 Hz
+		2			|	on		|	1 Hz
+		3			|	on		|	.5 Hz
+		4			|	off		|	N/A
+	NOTE that the blinking is a hardware function and each LED
+	(4 characters) blink independently. If both LEDs are set to 
+	the same rate, it is likely that they will become out of sync
+	within seconds, so it is recommended that only one LED be set
+	to blinking at a time. To blink the entire display, call this
+	function repeatedly, alternating between 0 and 4 for both LEDs.
+	Turning the display on and off this way does not affect the
+	text being displayed or the brightness of the LEDs.
+
+	If the value > 4 then it will be ignored. This allows the first 
+	LED to be left at its current configuration while controlling
+	only the second.
+*/
+void wrapperDisplayBlink(
+	int argc,
+	const char * argv[])
+{
+	SegDispErrEnum		err;
+	SegDispBlinkEnum	rate1, rate2;
+
+	rate1 = SegDispNO_BLINK;
+	rate2 = SegDispNO_BLINK;
+
+	if (argc > 2)
+	{
+		rate1 = atoi(argv[2]);
+	}
+
+	if (argc > 3)
+	{
+		rate2 = atoi(argv[3]);
+	}
+
+	usps_bb_display_blink(rate1, rate2);
+}
+
+/*!
+ *	@brief		backlight [brightness [grayscale]] 
+ *	@details
+ Command for testing the backlight LED. With no parameters, the backlight is
+ turned on to its brightest settings. The brightness of the LED is determined
+ by the combination of the brightness and grayscale parameters, according to
+ the following formula:
+ actual = brightness/BACKLIGHT_BRIGHTNESS_MAX * grayscale/BACKLIGHT_GRAYSCALE_MAX
+
+ BACKLIGHT_BRIGHTNESS_MAX = 127
+ BACKLIGHT_GRAYSCALE_MAX = 65535
+
+ The brighness parameter is optional. The default is 127. If supplied, the value
+ is in the range of 0-127, which provides 128 levels of brightness with 0 being 
+ off.
+
+ The grayscale parameter is optional and may be used in addition to the brightness
+ parameter. The default is 65535. If supplied, the value is in the range of 
+ 0-65535.
+**/
+void wrapperBacklight(
+	int argc,
+	const char * argv[])
+{
+	uint8_t		brightness = BACKLIGHT_BRIGHTNESS_MAX;
+	uint16_t	grayscale = BACKLIGHT_GRAYSCALE_MAX;
+
+	if (argc > 2)
+	{
+		brightness = atoi(argv[2]);
+	}
+	if (argc > 3)
+	{
+		grayscale = atoi(argv[3]);
+	}
+	usps_bb_backlight_set_brightness(brightness);
+	usps_bb_backlight_set_grayscale(grayscale);
+	usps_bb_backlight_show();
+}
+
+/*!
+ *	@brief		backlightBlink [onMS [offMS [count]]] 
+ *	@details
+ The command animates the backlight LED by blinking it at its maximum brightness.
+ The backlight LED will, by default, blink 3 times with a 2 second period at
+ 50% duty cycle.
+
+ The onMS parameter is optional. The default is 1000. If supplied, the value
+ is the number of milliseconds the LED will be on for each cycle.
+
+ The offMS parameter is optional and may be used in addition to the onMS
+ parameter. The default is 1000. If supplied, the value is the number of 
+ milliseconds the LED will be off for each cycle.
+
+ The count parameter is optional and may be used in addition to the onMS and offMS
+ parameters. The default is 3. If supplied, the value is the number of blink cycles.
+
+ NOTE that this function yields to other threads, but blocks the main thread until
+ it completes. That amount of time is (onMS + offMS) * count. An application would
+ typically run similar code in a separate thread.
+**/
+void wrapperBacklightBlink(
+	int argc,
+	const char * argv[])
+{
+	BacklightErrEnum	err;
+	uint32_t			onMS = 1 * MSECS_PER_SECOND;
+	uint32_t			offMS = 1 * MSECS_PER_SECOND;
+	int					blinkCount = 3;
+
+	if (argc > 2)
+	{
+		onMS = atoi(argv[2]);
+		if (argc > 3)
+		{
+			offMS = atoi(argv[3]);
+			if (argc > 4)
+			{
+				blinkCount = atoi(argv[4]);
+			}
+		}
+	}
+	err = BacklightBlink( BACKLIGHT_BRIGHTNESS_MAX, BACKLIGHT_GRAYSCALE_MAX, 
+							onMS, offMS, blinkCount);
+	if (BacklightNoErr != err)
+	{
+		printf("Backlight blink: %s\n", BacklightErrDesc(err));
+	}
+}
+
+
+/*!
+ *	@brief		backlightPulse [durationMS] 
+ *	@details
+ The command animates the backlight LED by pulsing it from its minimum to its
+ maximum brightness five times.
+
+ The durationMS parameter is optional. The default is 1000. If supplied, the value
+ is the number of milliseconds for each cycle.
+
+ NOTE that this function yields to other threads, but blocks the main thread until
+ it completes. That amount of time is durationMS * 5. An application would
+ typically run similar code in a separate thread.
+**/
+void wrapperBacklightPulse(
+	int argc,
+	const char * argv[])
+{
+	BacklightErrEnum	err;
+	int					i;
+	int					durationMS = 1000;
+
+	if (argc > 2)
+	{
+		durationMS = atoi(argv[2]);
+	}
+
+	for (i = 0; i < 5; i++)
+	{
+		err = BacklightAnimateBrightness(BACKLIGHT_BRIGHTNESS_MIN, BACKLIGHT_BRIGHTNESS_MAX, 
+			durationMS / 2, false);
+		if (BacklightNoErr != err)
+		{
+			printf("Fade brightness: %s\n", BacklightErrDesc(err));
+			break;
+		}
+		err = BacklightAnimateBrightness(BACKLIGHT_BRIGHTNESS_MAX, BACKLIGHT_BRIGHTNESS_MIN, 
+			durationMS - (durationMS / 2), true);
+		if (BacklightNoErr != err)
+		{
+			printf("Fade brightness: %s\n", BacklightErrDesc(err));
+			break;
+		}
+	}
+}
+
+/*!
+ *	@brief		backlightPulseGS [durationMS] 
+ *	@details
+ The command animates the backlight LED by pulsing it from its minimum to its
+ maximum grayscale five times. This function is essentially identical to the
+ backlightPulse command, but animates the grayscale value, rather than the 
+ brightness value.
+
+ The durationMS parameter is optional. The default is 1000. If supplied, the value
+ is the number of milliseconds for each cycle.
+
+ NOTE that this function yields to other threads, but blocks the main thread until
+ it completes. That amount of time is durationMS * 5. An application would
+ typically run similar code in a separate thread.
+**/
+void wrapperBacklightPulseGS(
+	int argc,
+	const char * argv[])
+{
+	BacklightErrEnum	err;
+	int					i;
+	int					durationMS = 1000;
+
+	if (argc > 2)
+	{
+		durationMS = atoi(argv[2]);
+	}
+
+	for (i = 0; i < 5; i++)
+	{
+		err = BacklightAnimateGrayscale(BACKLIGHT_GRAYSCALE_MIN, BACKLIGHT_GRAYSCALE_MAX, 
+			durationMS / 2, false);
+		if (BacklightNoErr != err)
+		{
+			printf("Fade grayscale: %s\n", BacklightErrDesc(err));
+			break;
+		}
+		err = BacklightAnimateGrayscale(BACKLIGHT_GRAYSCALE_MAX, BACKLIGHT_GRAYSCALE_MIN, 
+			durationMS - (durationMS / 2), true);
+		if (BacklightNoErr != err)
+		{
+			printf("Fade grayscale: %s\n", BacklightErrDesc(err));
+			break;
+		}
+	}
+}
+
+/*!
+ *	@brief		dotstar [test]
+ *	@details
+ test is either 0 (fade brightness) or 1 (rotate)
+ *	@param		[in] argc: int argument count
+ *	@param		[in] argv: const char * argv[]
+ *	@retval		none
+ *	@test
+**/
+
+void wrapperDotstar(
+	int argc,
+	const char * argv[])
+{
+	const int cNumLEDs=240;
+	const int cCenter=5;
+	int test=0;
+	int i;
+	struct timespec tim;
+	tim.tv_sec=0;
+	tim.tv_nsec=1000*10000;
+
+	if(argc>2)
+		test=atoi(argv[2]);
+	printf("dotstar test=%d\n",test);
+
+	dotstar_create("/dev/spidev1.0", 5000000, cNumLEDs);
+
+    // Initialization for the tests
+    switch(test) {
+    case 0:
+        break;
+    case 1:
+        dotstar_set_strip(0,0,0,0);
+        for (i = 0; i < cCenter; i++) {
+            dotstar_strip_push_pixel_front(255,255,0,15);
+        }
+        break;
+    default:
+        break;
+    }
+
+	dotstar_show();
+
+	while(1) {
+		switch(test) {
+			case 0:
+          			for (i = 0; i < 256; i+=2) {
+                			dotstar_set_strip(0, 0, i, 15);
+                			dotstar_show();
+                			nanosleep(&tim, NULL);
+            			}
+            			for (i = 255; i > 0; i-=2) {
+               				dotstar_set_strip(0, 0, i, 15);
+                			dotstar_show();
+               				nanosleep(&tim, NULL);
+           			}
+				break;
+			case 1:
+           			for (i = 0; i < cNumLEDs-cCenter; i++) {
+           				dotstar_strip_rotate_right();
+               				dotstar_show();
+                			nanosleep(&tim, NULL);
+            			}
+            			for (i = 0; i < cNumLEDs-cCenter; i++) {
+                			dotstar_strip_rotate_left();
+                			dotstar_show();
+                			nanosleep(&tim, NULL); }
+				break;
+			default:
+				break;
+		}
+	}
+
+	dotstar_destroy();
+}
+
+/*!
+ *	@brief		asynchronous playback callback
+ *	@details	ALSA callback writes sine wave to audio output
+ *	@param		[in] handler: snd_async_handler_t *handler
+ *	@retval		none
+ *	@test
+**/
+
+void playback_callback(
+	snd_async_handler_t *handler)
+{
+	static float sPhase=0.0f;
+
+	snd_pcm_t *pcm=snd_async_handler_get_pcm(handler);
+	void *data=snd_async_handler_get_callback_private(handler);
+	//int fd=snd_async_handler_get_fd(handler);
+	//int signo=snd_async_handler_get_signo(handler);
+
+	snd_pcm_sframes_t available=snd_pcm_avail_update(gPlayback);
+	while(available>kPeriodSize) {
+		for(int i=0;i<kPeriodSize;i++) {
+			float data=sinf(2.0f*sPhase*M_PI);
+			sPhase+=kFrequency/kSampleRate;
+			if(sPhase>=1.0f) sPhase-=2.0f;
+
+			gPlaybackBuffer[i]=(short)(data*32767.0f);
+		}
+
+		snd_pcm_sframes_t frames=snd_pcm_writei(gPlayback,gPlaybackBuffer,kPeriodSize);
+		ALSA_ASSERT(frames==kPeriodSize);
+
+		available=snd_pcm_avail_update(gPlayback);
+	}
+
+	gPlaybackBuffers++;
+}
+
+/*!
+ *	@brief		asynchronous capture callback
+ *	@details	ALSA
+ *	@param		[in] handler: snd_async_handler_t *handler
+ *	@retval		none
+ *	@todo		not finished
+ *	@test
+**/
+
+void capture_callback(
+	snd_async_handler_t *handler)
+{
+	gCaptureBuffers++;
+}
+
+/*!
+ *	@brief		initialize audio
+ *	@details	ALSA
+ *	@retval		none
+ *	@todo		audio capture not finished
+ *	@test
+**/
+
+void initialize_audio()
+{
+	int result,card=-1;
+	snd_pcm_uframes_t bufferSize,periodSize;
+	snd_pcm_sframes_t frames;
+
+	printf("ALSA version=%s\n",snd_asoundlib_version());
+
+	while(1) {
+		char *name,*device;
+		void **hints,**h;
+
+		result=snd_card_next(&card);
+		if(card== -1) break;
+		ALSA_ERROR(result);
+		result=snd_card_get_name(card,&name);
+		ALSA_ERROR(result);
+		printf("card %d: '%s'\n",card,name);
+
+		result=snd_device_name_hint(card,"pcm",&hints);
+		ALSA_ERROR(result);
+
+		h=hints;
+		while(h!=NULL && *h!=NULL) {
+			device=snd_device_name_get_hint(*h++,"NAME");
+			printf("card %d: device '%s'\n",card,(device!=NULL)?device:"?");
+			free(device);
+		}
+
+		result=snd_device_name_free_hint(hints);
+		ALSA_ERROR(result);
+
+		free(name);
+	}
+	
+	result=snd_pcm_open(&gPlayback,"plughw:CARD=Set,DEV=0",SND_PCM_STREAM_PLAYBACK,0);
+	ALSA_ERROR(result);
+	
+	result=snd_pcm_set_params(gPlayback,
+		SND_PCM_FORMAT_S16_LE,			// format
+		SND_PCM_ACCESS_RW_INTERLEAVED,		// access
+		1,					// number of channels
+		kSampleRate,				// sample rate
+		0,					// don't allow resampling
+		kBufferSize*1000000LL/kSampleRate);	// latency in microseconds
+	ALSA_ERROR(result);
+
+	result=snd_pcm_get_params(gPlayback,
+		&bufferSize,
+		&periodSize);
+	ALSA_ERROR(result);
+	ALSA_ASSERT(bufferSize==kBufferSize);
+	ALSA_ASSERT(periodSize==kPeriodSize);
+	printf("bufferSize=%d periodSize=%d\n",bufferSize,periodSize);
+
+	result=snd_pcm_prepare(gPlayback);
+	ALSA_ERROR(result);
+
+	frames=snd_pcm_writei(gPlayback,gPlaybackBuffer,kPeriodSize);
+	ALSA_ASSERT(frames==kPeriodSize);
+	frames=snd_pcm_writei(gPlayback,gPlaybackBuffer,kPeriodSize);
+	ALSA_ASSERT(frames==kPeriodSize);
+
+	result=snd_async_add_pcm_handler(&gPlaybackHandler,gPlayback,playback_callback,NULL);
+	ALSA_ERROR(result);
+
+	result=snd_pcm_start(gPlayback);
+	ALSA_ERROR(result);
+} 
+
+/*!
+ *	@brief		done audio
+ *	@details	ALSA
+ *	@retval		none
+ *	@test
+**/
+
+void done_audio()
+{
+	int result=snd_pcm_drop(gPlayback);
+	ALSA_ERROR(result);
+
+	result=snd_async_del_handler(gPlaybackHandler);
+	ALSA_ERROR(result);
+	gPlaybackHandler=NULL;
+
+	result=snd_pcm_close(gPlayback);
+	ALSA_ERROR(result);
+	gPlayback=NULL;
+
+	printf("playback buffers=%d\n",gPlaybackBuffers);
+}
+
+/*!
+*	@brief		Pulse the backlight LED brightness once. 
+*	@details
+This function pulses the backlight LED by animating the brightness. It is 
+animated from a start brightness value to an end value over a duration of time
+in milliseconds. The initial value can be skipped, which can be useful when 
+chaining together a series of animations.
+
+NOTE that the grayscale value is not changed, so it can be controlled
+outside of this function.
+
+@return		Backlight error codes returned by the driver.
+
+@param start The starting brightness value.
+@param end The ending brightness value.
+@param durationMS The duration of the animation.
+@param skipFirst Set to true to skip the start value.
+*/
+BacklightErrEnum BacklightAnimateBrightness(
+	BacklightBrightness start, 
+	BacklightBrightness end, 
+	uint32_t durationMS,
+	bool skipFirst)
+{
+	const struct timespec	timeDelay = {0, ANIMATION_INC_MS * NSEC_PER_MSECS};
+	struct timespec			startTime;
+	struct timespec			currentTime;
+	uint32_t				deltaTimeMS;
+	long					range;
+	BacklightErrEnum		err;
+	BacklightBrightness		current;
+
+	clock_gettime(CLOCK_MONOTONIC_RAW, &startTime);
+	range = end - start;
+	err = BacklightNoErr;
+	while (BacklightNoErr == err)
+	{
+		clock_gettime(CLOCK_MONOTONIC_RAW, &currentTime);
+		deltaTimeMS = (currentTime.tv_sec - startTime.tv_sec) * MSECS_PER_SECOND +
+			(currentTime.tv_nsec - startTime.tv_nsec) / NSEC_PER_MSECS;
+		if (skipFirst)
+		{
+			deltaTimeMS += ANIMATION_INC_MS;
+		}
+		if (deltaTimeMS > durationMS)
+		{
+			current = end;
+		}
+		else
+		{
+			current = start + ((range * (long)deltaTimeMS) / (long)durationMS);
+		}
+		err = SetBrightness(current, BACKLIGHT_BRIGHTNESS_MIN, true);
+		if (deltaTimeMS >= durationMS)
+		{
+			break;
+		}
+		nanosleep(&timeDelay, NULL);
+	}
+
+	return err;
+}
+
+/*!
+*	@brief		Pulse the backlight LED grayscale once. 
+*	@details
+This function pulses the backlight LED by animating the grayscale. It is 
+animated from a start grayscale value to an end value over a duration of time
+in milliseconds. The initial value can be skipped, which can be useful when 
+chaining together a series of animations.
+
+NOTE that the brightness value is not changed, so it can be controlled
+outside of this function.
+
+@return		Backlight error codes returned by the driver.
+
+@param start The starting grayscale value.
+@param end The ending grayscale value.
+@param durationMS The duration of the animation.
+@param skipFirst Set to true to skip the start value.
+*/
+BacklightErrEnum BacklightAnimateGrayscale(
+	BacklightGrayscale start, 
+	BacklightGrayscale end, 
+	uint32_t durationMS,
+	bool skipFirst)
+{
+	const struct timespec	timeDelay = {0, ANIMATION_INC_MS * NSEC_PER_MSECS};
+	struct timespec			startTime;
+	struct timespec			currentTime;
+	uint32_t				deltaTimeMS;
+	long					range;
+	BacklightErrEnum		err;
+	BacklightGrayscale		current;
+
+	clock_gettime(CLOCK_MONOTONIC_RAW, &startTime);
+	range = end - start;
+	err = BacklightNoErr;
+	while (BacklightNoErr == err)
+	{
+		clock_gettime(CLOCK_MONOTONIC_RAW, &currentTime);
+		deltaTimeMS = (currentTime.tv_sec - startTime.tv_sec) * MSECS_PER_SECOND +
+			(currentTime.tv_nsec - startTime.tv_nsec) / NSEC_PER_MSECS;
+		if (skipFirst)
+		{
+			deltaTimeMS += ANIMATION_INC_MS;
+		}
+		if (deltaTimeMS > durationMS)
+		{
+			current = end;
+		}
+		else
+		{
+			current = start + ((range * (long)deltaTimeMS) / (long)durationMS);
+		}
+		err = SetGrayscale(current, BACKLIGHT_GRAYSCALE_MIN, true);
+		if (deltaTimeMS >= durationMS)
+		{
+			break;
+		}
+		nanosleep(&timeDelay, NULL);
+	}
+
+	return err;
+}
+
+/*!
+*	@brief		Blink the backlight LED some number of times. 
+*	@details
+This function blinks the backlight LED. It is turned off and then on. Off is
+a brightness of 0. The on brightness is a combination of the brightness and
+grayscaled parameters. The off and on times are defined by caller supplied
+parameters. The LED is initially turned off. The number of blinks is also
+a parameter.
+
+@return		Backlight error codes returned by the driver.
+
+@param brightness The "on" brightness value.
+@param grayscale The "on" grayscale value.
+@param onMS The duration of the on part of the duty cycle in milliseconds.
+@param offMS The duration of the off part of the duty cycle in milliseconds.
+@param blinkCount The number of blinks.
+*/
+BacklightErrEnum BacklightBlink(
+	BacklightBrightness brightness, 
+	BacklightGrayscale grayscale, 
+	uint32_t onMS, uint32_t offMS, int blinkCount)
+{
+	BacklightErrEnum	err;
+	int					iBlink;
+	struct timespec		timeDelay = {0, 0};
+	struct timespec		timeRemaining;
+
+	//Set the grayscale to the on value and then blink using brightness.
+	err = SetGrayscale(grayscale, BACKLIGHT_GRAYSCALE_MIN, false);
+
+	err = SetBrightness(BACKLIGHT_BRIGHTNESS_MIN, BACKLIGHT_BRIGHTNESS_MIN, true);
+	if (BacklightNoErr != err) return err;
+
+	for (iBlink = 0; iBlink < blinkCount; iBlink++)
+	{
+		timeDelay.tv_sec = offMS / MSECS_PER_SECOND;
+		timeDelay.tv_nsec = (offMS % MSECS_PER_SECOND) * NSEC_PER_MSECS;
+		while(nanosleep(&timeDelay, &timeRemaining) < 0 && (timeRemaining.tv_sec > 0 || timeRemaining.tv_nsec > 0))
+		{
+			timeDelay.tv_sec = timeRemaining.tv_sec;
+			timeDelay.tv_nsec = timeRemaining.tv_nsec;
+		};
+
+		err = SetBrightness(brightness, BACKLIGHT_BRIGHTNESS_MIN, true);
+		if (BacklightNoErr != err) return err;
+
+		timeDelay.tv_sec = onMS / MSECS_PER_SECOND;
+		timeDelay.tv_nsec = (onMS % MSECS_PER_SECOND) * NSEC_PER_MSECS;
+		while(nanosleep(&timeDelay, &timeRemaining) < 0 && (timeRemaining.tv_sec > 0 || timeRemaining.tv_nsec > 0))
+		{
+			timeDelay.tv_sec = timeRemaining.tv_sec;
+			timeDelay.tv_nsec = timeRemaining.tv_nsec;
+		};
+
+		err = SetBrightness(BACKLIGHT_BRIGHTNESS_MIN, BACKLIGHT_BRIGHTNESS_MIN, true);
+		if (BacklightNoErr != err) return err;
+	}
+
+	return err;
+}

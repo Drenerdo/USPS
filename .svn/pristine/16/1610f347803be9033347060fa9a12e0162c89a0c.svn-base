@@ -1,0 +1,479 @@
+/******************************************************************************
+	main.c
+
+	BCA
+******************************************************************************/
+
+#include "usps_bb_api.h"
+#include "ProjectConfig.h"
+#include "Backlight.h"
+#include "dotstar.h"
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+#include <time.h>
+
+#include <alsa/asoundlib.h>
+
+#define ALSA_ERROR(result) do {\
+		if(result)\
+			printf("%s:%s:%d: ALSA %s\n",__FILE__,__FUNCTION__,__LINE__,snd_strerror(result));\
+	} while(0)
+#define ALSA_ASSERT(condition) do {\
+		if((condition)==0)\
+			printf("%s:%s:%d: ALSA " #condition "\n",__FILE__,__FUNCTION__,__LINE__);\
+	} while(0)
+
+typedef void (*usps_bb_wrapper)(int argc,const char * argv[]);
+
+//	WRAPPER_(	command,			function)
+#define WRAPPER_LIST \
+	WRAPPER_( "api1"				,wrapper1					)\
+	WRAPPER_( "api2"				,wrapper2					)\
+	WRAPPER_( "backlight"			,wrapperBacklight			)\
+	WRAPPER_( "backlightBlink"		,wrapperBacklightBlink		)\
+	WRAPPER_( "backlightPulseGS"	,wrapperBacklightPulseGS	)\
+	WRAPPER_( "backlightPulse"		,wrapperBacklightPulse		)\
+	WRAPPER_( "dotstar"				,wrapperDotstar				)\
+//Comment terminates list macro. Do not delete.
+
+//Ouput command function prototypes.
+#define WRAPPER_(command, function) void function(int argc,const char *argv[]);
+	WRAPPER_LIST
+#undef WRAPPER_
+
+typedef struct {
+	char			*name;
+	usps_bb_wrapper	wrapper;
+} usps_bb_command;
+
+//Ouput command function lookup table.
+static const usps_bb_command  gCommands[]=
+{
+#define WRAPPER_(command, function) {command, function},
+	WRAPPER_LIST
+#undef WRAPPER_
+	{ NULL, NULL }
+};
+
+#define kFrequency	261.6	// middle C
+#define kSampleRate	44100
+#define kPeriodSize	1024
+#define kBufferSize	(4*kPeriodSize)	// ALSA latency 4x
+
+snd_pcm_t *		gPlayback=NULL;
+short			gPlaybackBuffer[kPeriodSize];
+snd_async_handler_t *	gPlaybackHandler=NULL;
+unsigned		gPlaybackBuffers=0;
+snd_pcm_t *		gCapture=NULL;
+short			gCaptureBuffer[kPeriodSize];
+snd_async_handler_t *	gCaptureHandler=NULL;
+unsigned		gCaptureBuffers=0;
+
+void initialize_audio(void);
+void done_audio(void);
+
+void playback_callback(snd_async_handler_t *handler);
+void capture_callback(snd_async_handler_t *handler);
+
+/******************************************************************************
+  main
+
+******************************************************************************/
+
+int main(
+	int argc,
+	const char * argv[])
+{
+	int i;
+	const usps_bb_command * command=gCommands;
+	clock_t start,current;
+
+	printf("argc=%d\n",argc);
+	for(i=0;i<argc;i++)
+		printf("argv[%d]=%s\n",i,argv[i]);
+
+	initialize_audio();
+
+	if(argc>1) {
+		for(i=0;command->name!=NULL;i++,command++) {
+			if(strcmp(argv[1],command->name)==0) {
+				if(command->wrapper!=NULL)
+				{
+					printf("Testing: %s\n", command->name);
+					(command->wrapper)(argc,argv);
+				}
+				else
+				{
+					printf("no wrapper for '%s'\n",command->name);
+				}
+			}
+		}
+	}
+
+	start=clock();	// microseconds
+	do {
+		current=clock();
+	} while(current - start < 10*USEC_PER_SECOND);
+
+	done_audio();
+
+	return 0;
+}
+
+/******************************************************************************
+	wrapper1
+
+******************************************************************************/
+
+void wrapper1(
+	int argc,
+	const char * argv[])
+{
+}
+
+/******************************************************************************
+	wrapper2
+
+******************************************************************************/
+
+void wrapper2(
+	int argc,
+	const char * argv[])
+{
+}
+
+/******************************************************************************
+	wrapperBacklight
+
+******************************************************************************/
+
+void wrapperBacklight(
+	int argc,
+	const char * argv[])
+{
+	BacklightErrEnum		err;
+
+	err = SetBrightness(BACKLIGHT_BRIGHTNESS_MAX, BACKLIGHT_BRIGHTNESS_MIN, false);
+	if (BacklightNoErr != err)
+	{
+		printf("SetBrightness: %s\n", BacklightErrDesc(err));
+	}
+	else
+	{
+		err = SetGrayscale(BACKLIGHT_GRAYSCALE_MAX, BACKLIGHT_GRAYSCALE_MIN, true);
+		if (BacklightNoErr != err)
+		{
+			printf("SetGrayscale: %s\n", BacklightErrDesc(err));
+		}
+	}
+}
+
+/******************************************************************************
+	wrapperBacklightBlink
+
+******************************************************************************/
+
+void wrapperBacklightBlink(
+	int argc,
+	const char * argv[])
+{
+	BacklightErrEnum	err;
+	uint32_t			onMS = 1 * MSECS_PER_SECOND;
+	uint32_t			offMS = 1 * MSECS_PER_SECOND;
+	int					blinkCount = 3;
+
+	if (argc > 2)
+	{
+		onMS = atoi(argv[2]);
+		if (argc > 3)
+		{
+			offMS = atoi(argv[3]);
+			if (argc > 4)
+			{
+				blinkCount = atoi(argv[4]);
+			}
+		}
+	}
+	err = BacklightBlink( BACKLIGHT_BRIGHTNESS_MAX, BACKLIGHT_GRAYSCALE_MAX, 
+							onMS, offMS, blinkCount);
+	if (BacklightNoErr != err)
+	{
+		printf("Backlight blink: %s\n", BacklightErrDesc(err));
+	}
+}
+
+
+/*******************************************************************************/
+void wrapperBacklightPulse(
+	int argc,
+	const char * argv[])
+{
+	BacklightErrEnum	err;
+	int					i;
+	int					durationMS = 1000;
+
+	if (argc > 2)
+	{
+		durationMS = atoi(argv[2]);
+	}
+
+	for (i = 0; i < 5; i++)
+	{
+		err = BacklightAnimateBrightness(BACKLIGHT_BRIGHTNESS_MIN, BACKLIGHT_BRIGHTNESS_MAX, 
+			durationMS / 2);
+		if (BacklightNoErr != err)
+		{
+			printf("Fade brightness: %s\n", BacklightErrDesc(err));
+			break;
+		}
+		err = BacklightAnimateBrightness(BACKLIGHT_BRIGHTNESS_MAX, BACKLIGHT_BRIGHTNESS_MIN, 
+			durationMS - (durationMS / 2));
+		if (BacklightNoErr != err)
+		{
+			printf("Fade brightness: %s\n", BacklightErrDesc(err));
+			break;
+		}
+	}
+}
+
+/*******************************************************************************/
+void wrapperBacklightPulseGS(
+	int argc,
+	const char * argv[])
+{
+	BacklightErrEnum	err;
+	int					i;
+	int					durationMS = 1000;
+
+	if (argc > 2)
+	{
+		durationMS = atoi(argv[2]);
+	}
+
+	for (i = 0; i < 5; i++)
+	{
+		err = BacklightAnimateGrayscale(BACKLIGHT_GRAYSCALE_MIN, BACKLIGHT_GRAYSCALE_MAX, 
+			durationMS / 2);
+		if (BacklightNoErr != err)
+		{
+			printf("Fade grayscale: %s\n", BacklightErrDesc(err));
+			break;
+		}
+		err = BacklightAnimateGrayscale(BACKLIGHT_GRAYSCALE_MAX, BACKLIGHT_GRAYSCALE_MIN, 
+			durationMS - (durationMS / 2));
+		if (BacklightNoErr != err)
+		{
+			printf("Fade grayscale: %s\n", BacklightErrDesc(err));
+			break;
+		}
+	}
+}
+
+/******************************************************************************
+	wrapperDotstar
+
+******************************************************************************/
+
+void wrapperDotstar(
+	int argc,
+	const char * argv[])
+{
+	const int cNumLEDs=240;
+	const int cCenter=5;
+	int test=0;
+	int i;
+	struct timespec tim;
+	tim.tv_sec=0;
+	tim.tv_nsec=1000*10000;
+
+	if(argc>2)
+		test=atoi(argv[2]);
+	printf("dotstar test=%d\n",test);
+
+	dotstar_create("/dev/spidev1.0",8000000,cNumLEDs);
+
+	dotstar_set_strip(0,0,0,0);
+
+	for(i=0;i<cCenter;i++)
+		dotstar_strip_push_pixel_front(255,255,0,15);
+
+	dotstar_show();
+
+	while(1) {
+		switch(test) {
+			case 0:
+          			for (i = 0; i < 256; i+=2) {
+                			dotstar_set_strip(0, 0, i, 15);
+                			dotstar_show();
+                			nanosleep(&tim, NULL);
+            			}
+            			for (i = 255; i > 0; i-=2) {
+               				dotstar_set_strip(0, 0, i, 15);
+                			dotstar_show();
+               				nanosleep(&tim, NULL);
+           			}
+				break;
+			case 1:
+           			for (i = 0; i < cNumLEDs-cCenter; i++) {
+           				dotstar_strip_rotate_right();
+               				dotstar_show();
+                			nanosleep(&tim, NULL);
+            			}
+            			for (i = 0; i < cNumLEDs-cCenter; i++) {
+                			dotstar_strip_rotate_left();
+                			dotstar_show();
+                			nanosleep(&tim, NULL); }
+				break;
+			default:
+				break;
+		}
+	}
+
+	dotstar_destroy();
+}
+
+/******************************************************************************
+	playback_callback
+
+******************************************************************************/
+
+void playback_callback(
+	snd_async_handler_t *handler)
+{
+	static float sPhase=0.0f;
+
+	snd_pcm_t *pcm=snd_async_handler_get_pcm(handler);
+	void *data=snd_async_handler_get_callback_private(handler);
+	//int fd=snd_async_handler_get_fd(handler);
+	//int signo=snd_async_handler_get_signo(handler);
+
+	snd_pcm_sframes_t available=snd_pcm_avail_update(gPlayback);
+	while(available>kPeriodSize) {
+		for(int i=0;i<kPeriodSize;i++) {
+			float data=sinf(2.0f*sPhase*M_PI);
+			sPhase+=kFrequency/kSampleRate;
+			if(sPhase>=1.0f) sPhase-=2.0f;
+
+			gPlaybackBuffer[i]=(short)(data*32767.0f);
+		}
+
+		snd_pcm_sframes_t frames=snd_pcm_writei(gPlayback,gPlaybackBuffer,kPeriodSize);
+		ALSA_ASSERT(frames==kPeriodSize);
+
+		available=snd_pcm_avail_update(gPlayback);
+	}
+
+	gPlaybackBuffers++;
+}
+
+/******************************************************************************
+	capture_callback
+
+******************************************************************************/
+
+void capture_callback(
+	snd_async_handler_t *handler)
+{
+	gCaptureBuffers++;
+}
+
+/******************************************************************************
+	initialize_audio
+
+******************************************************************************/
+
+void initialize_audio()
+{
+	int result,card=-1;
+	snd_pcm_uframes_t bufferSize,periodSize;
+	snd_pcm_sframes_t frames;
+
+	printf("ALSA version=%s\n",snd_asoundlib_version());
+
+	while(1) {
+		char *name,*device;
+		void **hints,**h;
+
+		result=snd_card_next(&card);
+		if(card== -1) break;
+		ALSA_ERROR(result);
+		result=snd_card_get_name(card,&name);
+		ALSA_ERROR(result);
+		printf("card %d: '%s'\n",card,name);
+
+		result=snd_device_name_hint(card,"pcm",&hints);
+		ALSA_ERROR(result);
+
+		h=hints;
+		while(h!=NULL && *h!=NULL) {
+			device=snd_device_name_get_hint(*h++,"NAME");
+			printf("card %d: device '%s'\n",card,(device!=NULL)?device:"?");
+			free(device);
+		}
+
+		result=snd_device_name_free_hint(hints);
+		ALSA_ERROR(result);
+
+		free(name);
+	}
+	
+	result=snd_pcm_open(&gPlayback,"plughw:CARD=Set,DEV=0",SND_PCM_STREAM_PLAYBACK,0);
+	ALSA_ERROR(result);
+	
+	result=snd_pcm_set_params(gPlayback,
+		SND_PCM_FORMAT_S16_LE,			// format
+		SND_PCM_ACCESS_RW_INTERLEAVED,		// access
+		1,					// number of channels
+		kSampleRate,				// sample rate
+		0,					// don't allow resampling
+		kBufferSize*1000000LL/kSampleRate);	// latency in microseconds
+	ALSA_ERROR(result);
+
+	result=snd_pcm_get_params(gPlayback,
+		&bufferSize,
+		&periodSize);
+	ALSA_ERROR(result);
+	ALSA_ASSERT(bufferSize==kBufferSize);
+	ALSA_ASSERT(periodSize==kPeriodSize);
+	printf("bufferSize=%d periodSize=%d\n",bufferSize,periodSize);
+
+	result=snd_pcm_prepare(gPlayback);
+	ALSA_ERROR(result);
+
+	frames=snd_pcm_writei(gPlayback,gPlaybackBuffer,kPeriodSize);
+	ALSA_ASSERT(frames==kPeriodSize);
+	frames=snd_pcm_writei(gPlayback,gPlaybackBuffer,kPeriodSize);
+	ALSA_ASSERT(frames==kPeriodSize);
+
+	result=snd_async_add_pcm_handler(&gPlaybackHandler,gPlayback,playback_callback,NULL);
+	ALSA_ERROR(result);
+
+	result=snd_pcm_start(gPlayback);
+	ALSA_ERROR(result);
+} 
+
+/******************************************************************************
+	done_audio
+
+******************************************************************************/
+
+void done_audio()
+{
+	int result=snd_pcm_drop(gPlayback);
+	ALSA_ERROR(result);
+
+	result=snd_async_del_handler(gPlaybackHandler);
+	ALSA_ERROR(result);
+	gPlaybackHandler=NULL;
+
+	result=snd_pcm_close(gPlayback);
+	ALSA_ERROR(result);
+	gPlayback=NULL;
+
+	printf("playback buffers=%d\n",gPlaybackBuffers);
+}
+
+

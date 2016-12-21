@@ -1,0 +1,13 @@
+CC = gcc
+CFLAGS = -std=gnu99 -ffast-math -mfloat-abi=hard -mfpu=neon -march=armv7-a -g -lm -lasound
+DEPS =  usps_bb_api.h
+
+test: main.o usps_bb_api.o Backlight.o dotstar.o
+	$(CC) -o test main.o usps_bb_api.o Backlight.o dotstar.o $(CFLAGS)
+
+%.o: %.c $(DEPS)
+	$(CC) -c -o $@ $< $(CFLAGS)
+
+clean:
+	rm test *.o
+

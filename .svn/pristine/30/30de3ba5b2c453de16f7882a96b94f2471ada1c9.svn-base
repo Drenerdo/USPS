@@ -1,0 +1,85 @@
+/*!
+@file macros.h
+Common useful macros and constant definitions.
+
+@copyright (c) 2014, Bay Computer Associates.<br>
+All rights reserved.<br>
+This file contains CONFIDENTIAL material.<br>
+Bay Computer Associates and forbids duplication of
+this material with out express written permission
+from Bay Computer Associates.
+
+@author John Heaney<br>
+Bay Computer Associates, Inc.<br>
+136 Frances Ave.<br>
+Cranston, RI 02910<br>
+Tel. (401) 461-1484
+
+Repository URL:		$HeadURL: svn://svn/BCA/RTOS/CompanyStarter/ProjectStarter/trunk/ProjectStarter/Target/ProjectConfiguration/macros.h $
+Last changed by:	$Author: lholden $
+Last changed on:	$Date: 2014-11-17 12:00:28 -0500 (Mon, 17 Nov 2014) $
+Revision:			$Rev: 7754 $
+*/
+
+#ifndef _MACROS_H
+#define _MACROS_H
+
+
+//Convenient macros for dealing with array sizes.
+#define ARRAY_SIZE(array) (sizeof(array)/sizeof(*array))
+#define ARRAY_WITH_SIZE(array) (array), ARRAY_SIZE(array)
+#define BUFFER_WITH_SIZE(buffer) (buffer), sizeof(buffer)
+
+//The macro quoted_define(def) will wrap the argument with quotes. This is useful for
+// using numeric defines as strings. Do NOT use quoted_define_. That's part of the magic.
+#define quoted_define_(x) #x
+#define quoted_define(def) quoted_define_(def)
+
+//These macros allow names to be built using a mix of C symbols and macro
+// definitions. Normally, you cannot join a C symbol and a macro, but if you
+// supply the two as parameters in these macros then they are both macro symbols
+// when the join occurs and it works. These are just generic macros to do that.
+#define MACRO_CONCAT2(p1, p2) p1##p2
+#define MACRO_CONCAT3(p1, p2, p3) p1##p2##p3
+#define MACRO_CONCAT4(p1, p2, p3, p4) p1##p2##p3##p4
+#define MACRO_CONCAT5(p1, p2, p3, p4, p5) p1##p2##p3##p4##p5
+
+//This is a generic macro for creating a register symbol where there are
+// multiple instances that are identified by a number.
+#define HW_REGn(reg, n) MACRO_CONCAT2(reg, n)
+
+//Create a bit mask from a number of bits.
+#define BIT_MASK(BITS) ((1 << BITS) - 1)
+
+//Create a bit mask at a bit offset.
+#define BIT_FIELD_MASK(OFFSET, BITS) (((1 << BITS) - 1) << OFFSET)
+
+//Shift a bit field value into an integer.
+#define SHIFT_BITS_FROM_RIGHT(VARIABLE, VALUE, BITS) \
+	VARIABLE = (VARIABLE << BITS) | (VALUE & BIT_MASK(BITS));
+
+//Assign a bit field value into an integer.
+#define SET_BIT_FIELD(VARIABLE, VALUE, BITS) \
+	VARIABLE = (VARIABLE << BITS) | (VALUE & BIT_MASK(BITS));
+
+//This macro makes it easy to define an enumeration that defines an offset, rather than
+// an increment. The enumTag represents the offset and the size forces the following
+// enumeration tag to be offset by that amount, rather than 1.
+// _ignore##enumTag creates a throwaway enumeration that only exists to perform the offset.
+#define ENUM_OFFSET(enumTag, size) enumTag, _ignore##enumTag = enumTag + (size) - 1
+
+#define USEC_PER_MSEC		1000
+#define MSECS_PER_SECOND	1000
+#define USEC_PER_SECOND		1000000L
+#define NSEC_PER_MSECS		1000000L
+#define NSEC_PER_SECOND		1000000000L
+#define SECONDS_PER_MINUTE	60
+#define MINUTES_PER_HOUR	60
+#define HOURS_PER_DAY		24
+#define DAYS_PER_WEEK		7
+#define MONTHS_PER_YEAR		12
+#define SECONDS_PER_HOUR	3600
+#define SECONDS_PER_DAY     86400L
+#define MSEC_PER_MINUTE		60000L
+
+#endif //_MACROS_H
